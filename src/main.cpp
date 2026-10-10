@@ -1671,10 +1671,13 @@ GameState updateDrawRecruitment(Vector2 mouse){
     DrawLine((int)rx,50,(int)rx,SCREEN_H-50,{60,50,35,120});
     float rightW=SCREEN_W-rx-10;
     DrawText("Recruitment queue:",(int)(rx+10),(int)60,13,C_PARCHMENT);
+    // PvP: el cliente solo ve SU cola (la del host no le concierne)
+    int qRow=0;
     for(int i=0;i<(int)g_campaign.recruitQueue.size();i++){
         auto& e=g_campaign.recruitQueue[i];
         if(e.typeIdx>=unitTypeCount()) continue;
-        float ry=80.f+i*30.f;
+        if(g_campaign.pvpMode&&e.faction!=(int)g_localFaction) continue;
+        float ry=80.f+qRow*30.f; qRow++;
         if(ry+30>SCREEN_H/2) break;
         DrawText(g_unitTypes[e.typeIdx].name,(int)(rx+10),(int)(ry+6),13,C_ALLY);
         DrawText(TextFormat("%d turn(s)",e.turnsLeft),(int)(rx+rightW-80),(int)(ry+6),12,C_SECONDARY);
