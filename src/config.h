@@ -117,7 +117,7 @@ void saveSettings();
 void loadSettings();
 
 // === GUARDADO ===
-inline const int SAVE_VERSION = 8;   // 8: Fase K (4a faccion + campana de 32 provincias)
+inline const int SAVE_VERSION = 9;   // 9: PvP (pvpMode + clientFaction + clientRes)
 
 // === ESTADO GLOBAL (:681-684) ===
 extern GameState g_state;

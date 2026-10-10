@@ -108,6 +108,12 @@ bool serializeCampaignState(const CampaignState& st, std::vector<char>& out){
     // Fase I: diplomacia — alianzas militares + pactos comerciales
     bw(out,st.allied,sizeof(bool)*FACTION_COUNT);
     bw(out,st.tradePact,sizeof(bool)*FACTION_COUNT);
+    // PvP (v9): dos reinos separados
+    unsigned char pvp=st.pvpMode?1:0;
+    int cf=(int)st.clientFaction;
+    bw1(out,pvp);
+    bw1(out,cf);
+    bw1(out,st.clientRes);
     return true;
 }
 
@@ -127,7 +133,8 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
     if(!data||size<sizeof(int)) return false;
     BufReader b{data,size};
     int ver=b.r1<int>();
-    if(!b.ok||ver!=SAVE_VERSION) return false;
+    // PvP (v9): aceptar v8 (compat: defaults PvP) y v9 (campos PvP)
+    if(!b.ok||(ver!=SAVE_VERSION&&ver!=8)) return false;
 
     st.campaignId=b.r1<int>();
     st.turn=b.r1<int>();
@@ -232,6 +239,18 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
     // Fase I: diplomacia — alianzas militares + pactos comerciales
     b.r(st.allied,sizeof(bool)*FACTION_COUNT);
     b.r(st.tradePact,sizeof(bool)*FACTION_COUNT);
+    // PvP (v9): dos reinos separados (v8 = defaults: co-op)
+    if(ver==9){
+        unsigned char pvp=b.r1<unsigned char>();
+        int cf=b.r1<int>();
+        st.pvpMode=(pvp!=0);
+        st.clientFaction=(FactionId)cf;
+        st.clientRes=b.r1<Resources>();
+    } else {
+        st.pvpMode=false;
+        st.clientFaction=FACTION_AGGRESSIVE;
+        st.clientRes=Resources();
+    }
     return b.ok;
 }
 

@@ -95,6 +95,11 @@ struct CampaignState {
     int              armyMoveTo=-1;
     int              armyMoveIdx=-1;   // Fase J: qué ejército se está moviendo
     float            armyMoveT=0.f;
+    // PvP (SAVE_VERSION=9): dos reinos separados. El host controla
+    // FACTION_PLAYER; el cliente una facción designada (clientFaction).
+    bool             pvpMode=false;    // true = cada jugador tiene su propio reino
+    FactionId        clientFaction=FACTION_AGGRESSIVE; // facción del cliente
+    Resources        clientRes;        // recursos del cliente (separados de res)
 };
 
 // (:666-675)
@@ -121,7 +126,11 @@ extern PreBattleState g_preBattle; // (:676)
 // Fase D+: bando del jugador en el mapa (propio + aliados = mismo color;
 // cada faccion enemiga conserva el suyo)
 bool  factionIsPlayerSide(FactionId f);
+bool  factionIsHuman(FactionId f);   // PvP: host (PLAYER) o cliente (clientFaction)
 Color factionDisplayColor(FactionId f);
+// Faccion que controla el jugador local: FACTION_PLAYER (host/solo/co-op) o
+// clientFaction (cliente PvP). main.cpp la actualiza cada frame segun el rol.
+extern FactionId g_localFaction;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  FASE I: DIPLOMACIA (alianzas militares + pactos comerciales + trueque)

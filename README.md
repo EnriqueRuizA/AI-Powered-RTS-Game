@@ -76,18 +76,28 @@ procedurales originales (fallback automático).
     valida (adyacencia, no aliado, ejército sin mover), entra en
     PRE_BATTLE y resuelve la batalla; el resultado se retransmite vía
     snapshot.
-  - **Limitaciones**: co-op reino compartido (sin dos reinos); defensas IA
-    las resuelve el host; acciones no sincronizadas se sobreescriben con el
-    siguiente snapshot; 1 `NetSession`/proceso. **`missPong`**: el cliente
-    detecta el cierre del host sin `BYE` tras ~10 s sin PONG y muestra
-    "Host lost". **`INADDR_ANY`**: el host se liga a todas las interfaces
-    (juego en red real LAN/WAN, no solo loopback). **Victoria/derrota del
-    cliente**: al aplicar un snapshot, el cliente entra en `STATE_VICTORY`
-    (≥80%) o `STATE_DEFEAT` (0), mismo umbral que el host. **Fiabilidad
-    CMD**: ACK del host + retransmisión del cliente (max 5 intentos, ~1 s
-    de espera) + deduplicación por seq en el host.
+  - **Limitaciones**: defensas IA las resuelve el host; acciones no
+    sincronizadas se sobreescriben con el siguiente snapshot; 1
+    `NetSession`/proceso. **`missPong`**: el cliente detecta el cierre del
+    host sin `BYE` tras ~10 s sin PONG y muestra "Host lost". **`INADDR_ANY`**:
+    el host se liga a todas las interfaces (juego en red real LAN/WAN, no
+    solo loopback). **Victoria/derrota del cliente**: al aplicar un snapshot,
+    el cliente entra en `STATE_VICTORY` (≥80%) o `STATE_DEFEAT` (0), mismo
+    umbral que el host. **Fiabilidad CMD**: ACK del host + retransmisión del
+    cliente (max 5 intentos, ~1 s de espera) + deduplicación por seq en el
+    host.
+  - **PvP — dos reinos separados** (`SAVE_VERSION=9`): el host controla
+    `FACTION_PLAYER`; al hacer JOIN en modo PvP asigna al cliente la primera
+    facción libre no-PLAYER/NEUTRAL y se la comunica en el WELCOME
+    (`"v1 f<N>"`). El host valida cada comando contra la facción del
+    remitente (`NetCmd.faction`) y usa `clientRes` para el reclutamiento del
+    cliente. El cliente usa `g_localFaction`/`clientRes` para selección,
+    recursos y UI; la IA salta la facción humana del cliente
+    (`factionIsHuman`). **Desactivado por defecto** (`pvpMode=false`;
+    co-op sigue siendo el modo por defecto; la opción de lobby para activar
+    PvP está pendiente).
 - Roadmap: F protocolo de sesión ✅ → G lobby ✅ → H sincronización ✅
-  (incluye H2 ataques). Detalle en `PLAN.md` §12.
+  (incluye H2 ataques y PvP dos reinos). Detalle en `PLAN.md` §12.
 
 ## Tests
 

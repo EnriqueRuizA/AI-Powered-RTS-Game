@@ -494,6 +494,7 @@ struct NetHostClient {
     char     ip[NET_NAME_LEN]={};
     uint16_t port=0;       // Fase H: puerto efimero del cliente (para snapshots)
     uint16_t lastSeq=0;
+    int      faction=0;    // PvP: faccion que controla este cliente (0=FACTION_PLAYER en co-op)
 };
 static NetHostClient g_hostClients[NET_MAX_CLIENTS];
 
@@ -625,6 +626,18 @@ void netSessionPoll(){
                     slot->lastSeq=r.seq;
                     slot->port=srcPort;
                     snprintf(slot->ip,sizeof slot->ip,"%s",srcIp);
+                    // PvP: asignar faccion al cliente (primera libre no-PLAYER/NEUTRAL)
+                    if(S.pvpMode){
+                        bool taken[NET_FACTION_COUNT]={};
+                        taken[NET_FACTION_PLAYER]=true; taken[NET_FACTION_NEUTRAL]=true; // host=PLAYER, NEUTRAL no jugable
+                        for(auto& c : g_hostClients)
+                            if(c.used&&c.faction>=0&&c.faction<NET_FACTION_COUNT) taken[c.faction]=true;
+                        int f=-1;
+                        for(int i=1;i<NET_FACTION_COUNT;i++) if(!taken[i]){ f=i; break; }
+                        slot->faction=(f>=0)?f:NET_FACTION_AGGRESSIVE; // fallback
+                    } else {
+                        slot->faction=0; // co-op: todos en FACTION_PLAYER
+                    }
                     int cnt=1;
                     for(auto& c : g_hostClients) if(c.used) cnt++;
                     S.playerCount=cnt;
@@ -634,7 +647,11 @@ void netSessionPoll(){
                 NetMsg w={};
                 w.type=NET_MSG_WELCOME;
                 w.seq=++S.seq;
-                snprintf(w.payload,sizeof w.payload,"v%d",(int)NET_PROTO_VERSION);
+                // Payload: "v<ver> f<faccion>" (faccion solo en PvP; en co-op se omite)
+                if(S.pvpMode&&slot)
+                    snprintf(w.payload,sizeof w.payload,"v%d f%d",(int)NET_PROTO_VERSION,slot->faction);
+                else
+                    snprintf(w.payload,sizeof w.payload,"v%d",(int)NET_PROTO_VERSION);
                 netSendMsg(S.sock,srcIp,srcPort,w);
             }else if(r.type==NET_MSG_PING){
                 NetMsg p={};
@@ -666,6 +683,7 @@ void netSessionPoll(){
                     memcpy(&c.a,r.payload+1,4);
                     memcpy(&c.b,r.payload+5,4);
                     memcpy(&c.c,r.payload+9,4);
+                    c.faction=slot?slot->faction:0; // PvP: faccion del remitente
                 }
                 // Fiabilidad: ACK siempre (aunque sea dup; el cliente puede
                 // haber perdido el ACK original).
@@ -680,7 +698,15 @@ void netSessionPoll(){
                 S.connected=true;
                 S.playerCount=2;
                 S.lastPongTick=S.pollTick; // missPong: reiniciar contador
-                snprintf(S.status,sizeof S.status,"Connected to %s (v%d)",S.peerIp,(int)NET_PROTO_VERSION);
+                // PvP: parsear faccion asignada del payload "v<ver> f<faccion>"
+                S.assignedFaction=-1; // co-op por defecto
+                int vf=0, ff=-1;
+                if(sscanf(r.payload,"v%d f%d",&vf,&ff)==2&&ff>=0&&ff<NET_FACTION_COUNT)
+                    S.assignedFaction=ff;
+                if(S.assignedFaction>=0)
+                    snprintf(S.status,sizeof S.status,"Connected to %s (v%d, faction %d)",S.peerIp,(int)NET_PROTO_VERSION,S.assignedFaction);
+                else
+                    snprintf(S.status,sizeof S.status,"Connected to %s (v%d)",S.peerIp,(int)NET_PROTO_VERSION);
             }else if(r.type==NET_MSG_REJECT){
                 snprintf(S.status,sizeof S.status,"Rejected: %.60s",r.payload);
                 S.connected=false;

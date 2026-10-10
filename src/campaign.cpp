@@ -33,10 +33,18 @@ int g_selectedProvince  = -1;  // 4.5: pulsing selected province
 //  Territorio propio y de facciones aliadas => mismo color (el del jugador);
 //  cada faccion enemiga conserva el suyo bien visible.
 // ───────────────────────────────────────────────────────────────────────────
+FactionId g_localFaction=FACTION_PLAYER; // main.cpp la actualiza segun el rol de red
 bool factionIsPlayerSide(FactionId f){
     if(f==FACTION_PLAYER) return true;
     if((int)f<0||(int)f>=FACTION_COUNT) return false;
     return g_campaign.allied[(int)f];
+}
+// PvP: true si la faccion esta controlada por un humano (host o cliente).
+// En co-op solo FACTION_PLAYER; en PvP ademas la clientFaction del cliente.
+bool factionIsHuman(FactionId f){
+    if(f==FACTION_PLAYER) return true;
+    if(g_campaign.pvpMode&&f==g_campaign.clientFaction) return true;
+    return false;
 }
 Color factionDisplayColor(FactionId f){
     if(factionIsPlayerSide(f)) return factionColors[FACTION_PLAYER];
@@ -71,12 +79,13 @@ int armyIndexAt(int province, FactionId owner){
 }
 
 void selectArmy(int idx){
-    // Solo ejércitos del jugador: si idx no existe o es de la IA (p.ej.
-    // selectArmy(0) cuando armies[0] es un ejército IA), cae al primero
-    // propio. readyUnits NUNCA debe contener tropas enemigas.
+    // Solo ejércitos de la faccion local (PLAYER o clientFaction en PvP):
+    // si idx no existe o es de la IA (p.ej. selectArmy(0) cuando armies[0]
+    // es un ejército IA), cae al primero propio. readyUnits NUNCA debe
+    // contener tropas enemigas.
     auto trySelect=[&](int i)->bool{
         if(i<0||i>=(int)g_campaign.armies.size()) return false;
-        if(g_campaign.armies[i].owner!=FACTION_PLAYER) return false;
+        if(g_campaign.armies[i].owner!=g_localFaction) return false;
         g_campaign.selectedArmy=i;
         g_campaign.readyUnits=g_campaign.armies[i].units;
         g_campaign.playerProvince=g_campaign.armies[i].province;
@@ -92,7 +101,7 @@ void selectArmy(int idx){
 int defenseSoldiers(int province){
     int s=0;
     for(auto& a:g_campaign.armies)
-        if(a.province==province&&a.owner==FACTION_PLAYER)
+        if(a.province==province&&a.owner==g_localFaction)
             s+=armySoldiers(a.units);
     return s;
 }
@@ -639,15 +648,19 @@ bool processTurn(){
     // Resource generation from ALL player cities
     for(int pi=0;pi<(int)g_campaign.provinces.size();pi++){
         Province& prov=g_campaign.provinces[pi];
-        if(prov.owner!=FACTION_PLAYER||!prov.hasCity) continue;
+        // PvP: income para host (PLAYER) y para la faccion del cliente (clientRes)
+        Resources* dest=nullptr;
+        if(prov.owner==FACTION_PLAYER) dest=&r;
+        else if(g_campaign.pvpMode&&prov.owner==g_campaign.clientFaction) dest=&g_campaign.clientRes;
+        if(!dest||!prov.hasCity) continue;
         City& c=prov.city;
         for(int b=0;b<BLD_COUNT;b++){
             if(!c.built[b]) continue;
-            r.gold+=bldGoldYield[b];
-            r.food+=bldFoodYield[b];
-            r.wood+=bldWoodYield[b];
-            r.stone+=bldStoneYield[b];
-            r.iron+=bldIronYield[b];
+            dest->gold+=bldGoldYield[b];
+            dest->food+=bldFoodYield[b];
+            dest->wood+=bldWoodYield[b];
+            dest->stone+=bldStoneYield[b];
+            dest->iron+=bldIronYield[b];
         }
         // Advance construction
         if(c.constructing>=0){
@@ -693,7 +706,8 @@ bool processTurn(){
     for(int pi2=0;pi2<(int)g_campaign.provinces.size();pi2++){
         Province& ep2=g_campaign.provinces[pi2];
         // Fase I: aliados militares del jugador no coalicionan contra el jugador
-        if(ep2.owner==FACTION_NEUTRAL||ep2.owner==FACTION_PLAYER
+        // PvP: la faccion humana del cliente tampoco es objetivo de coalicion IA
+        if(ep2.owner==FACTION_NEUTRAL||factionIsHuman(ep2.owner)
            ||factionIsPlayerSide(ep2.owner)) continue;
         bool adjPlayer=false;
         for(int adj2:ep2.adjacent) if(g_campaign.provinces[adj2].owner==FACTION_PLAYER) adjPlayer=true;
@@ -712,7 +726,7 @@ bool processTurn(){
 
     for(int pi2=0;pi2<(int)g_campaign.provinces.size();pi2++){
         Province& ep=g_campaign.provinces[pi2];
-        if(ep.owner==FACTION_NEUTRAL||ep.owner==FACTION_PLAYER) continue;
+        if(ep.owner==FACTION_NEUTRAL||factionIsHuman(ep.owner)) continue; // PvP: saltar faccion humana
 
         float roll=frandMT();
         bool inCoalition=false;
@@ -750,7 +764,8 @@ bool processTurn(){
     for(int ai=0;ai<(int)g_campaign.armies.size()&&!battlePending;ai++){
         FieldArmy& a=g_campaign.armies[ai];
         // Fase I: ni el jugador ni sus aliados militares marchan contra el jugador
-        if(factionIsPlayerSide(a.owner)||a.owner==FACTION_NEUTRAL) continue;
+        // PvP: la faccion humana del cliente tampoco la mueve la IA
+        if(factionIsHuman(a.owner)||factionIsPlayerSide(a.owner)||a.owner==FACTION_NEUTRAL) continue;
         a.moved=false;
         if(a.province<0||a.province>=np) continue;
 

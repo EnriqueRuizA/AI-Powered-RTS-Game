@@ -1191,21 +1191,40 @@ mínimo entre host y cliente:
   `netMarkDirty`/`netCanEdit`/`netHostApplyCmd`/`netSyncPump` (1×/frame en
   el main loop). El cliente no muta recursos/localmente en acciones de
   edición; las envía como comandos.
-- **Limitaciones documentadas**: co-op reino compartido (sin dos reinos
-  separados); defensas IA las resuelve el host; acciones no sincronizadas
-  se sobreescriben con el siguiente snapshot; 1 `NetSession`/proceso.
-  **`missPong` implementado**: el cliente detecta el cierre del host sin
-  `BYE` tras ~10 s sin PONG (600 ticks a ~60 fps) y pone
-  `connected=false` con mensaje "Host lost". **`INADDR_ANY` implementado**:
-  el socket del host se liga a todas las interfaces (no solo loopback), lo
-  que permite juego en red real; el cliente puede unirse por IP LAN/WAN.
-  **Checks victoria/derrota del cliente implementados**: al aplicar un
-  snapshot, el cliente cuenta sus provincias y entra en `STATE_VICTORY`
-  (≥80%) o `STATE_DEFEAT` (0), mismo umbral que el host. **Fiabilidad CMD
-  implementada**: el host envía `NET_MSG_ACK` (eco del seq) al recibir un
-  comando; el cliente guarda el comando pendiente y lo retransmite cada
-  ~1 s (max 5 intentos) si no llega ACK; el host deduplica por seq (ip:port
-  + lastSeq) para no aplicar reenvíos dos veces.
+- **Limitaciones documentadas**: defensas IA las resuelve el host; acciones
+  no sincronizadas se sobreescriben con el siguiente snapshot; 1
+  `NetSession`/proceso. **`missPong` implementado**: el cliente detecta el
+  cierre del host sin `BYE` tras ~10 s sin PONG (600 ticks a ~60 fps) y
+  pone `connected=false` con mensaje "Host lost". **`INADDR_ANY`
+  implementado**: el socket del host se liga a todas las interfaces (no solo
+  loopback), lo que permite juego en red real; el cliente puede unirse por
+  IP LAN/WAN. **Checks victoria/derrota del cliente implementados**: al
+  aplicar un snapshot, el cliente cuenta sus provincias y entra en
+  `STATE_VICTORY` (≥80%) o `STATE_DEFEAT` (0), mismo umbral que el host.
+  **Fiabilidad CMD implementada**: el host envía `NET_MSG_ACK` (eco del seq)
+  al recibir un comando; el cliente guarda el comando pendiente y lo
+  retransmite cada ~1 s (max 5 intentos) si no llega ACK; el host
+  deduplica por seq (ip:port + lastSeq) para no aplicar reenvíos dos veces.
+- **PvP — dos reinos separados (última limitación grande, RESUELTA)**:
+  `SAVE_VERSION=9` añade `pvpMode`/`clientFaction`/`clientRes` al final de
+  `CampaignState` (deserialize acepta v8 con defaults). El host es
+  `FACTION_PLAYER`; al hacer JOIN en modo PvP asigna al cliente la primera
+  facción libre no-PLAYER/NEUTRAL (`NetHostClient.faction`) y la comunica en
+  el payload de WELCOME (`"v1 f<N>"`; el cliente la guarda en
+  `NetSession.assignedFaction`). El host rellena `NetCmd.faction` con la
+  facción del remitente al encolar comandos; `netHostApplyCmd` valida
+  propiedad/costes contra esa facción (no contra `FACTION_PLAYER`
+  hardcodeado) y usa `clientRes` para el reclutamiento del cliente. El
+  cliente fija `g_localFaction` (= `clientFaction` en PvP, `PLAYER` en
+  co-op/solo) cada frame; `selectArmy`/`defenseSoldiers`, el handler de
+  clicks (mover/atacar), la barra de recursos, el ejército seleccionado y
+  las pantallas de ciudad/reclutamiento/mercado/diplomacia usan
+  `g_localFaction`/`clientRes`. `factionIsHuman` hace que la IA salte la
+  facción humana del cliente (coalición, refuerzos, ejércitos de campo) y
+  `processTurn` da income a `clientRes` para sus ciudades. Check de
+  victoria/derrota local usa la facción propia. **Desactivado por
+  defecto**: `pvpMode=false` en `newCampaign` (co-op sigue siendo el modo
+  por defecto; PvP se activará con una opción de lobby pendiente).
 - `runSyncTest` vive en `src/sync_test.cpp` (incluye `campaign.h`/`raylib.h`,
   sin winsock; usa `std::this_thread::sleep_for`) para evitar el choque
   raylib.h vs windows.h. `-nettest` ampliado: `rc4=runSyncTest()`, exit 0

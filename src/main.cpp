@@ -87,6 +87,9 @@ static bool netCanEdit(){
 
 // Host: aplica un comando recibido del cliente (validación básica).
 static void netHostApplyCmd(const NetCmd& c){
+    // PvP: c.faction es la facción del remitente (0=FACTION_PLAYER en co-op).
+    // En co-op todos los clientes son FACTION_PLAYER; en PvP cada uno su facción.
+    int cf=c.faction;
     switch(c.cmd){
     case NET_CMD_END_TURN:{
         if(g_state!=STATE_CAMPAIGN_MAP) break; // host ocupado (batalla, etc.)
@@ -107,12 +110,15 @@ static void netHostApplyCmd(const NetCmd& c){
         if(to<0||to>=(int)g_campaign.provinces.size()) break;
         bool adj=false; for(int a:g_campaign.provinces[from].adjacent) if(a==to) adj=true;
         if(!adj) break;
-        if(g_campaign.provinces[to].owner!=FACTION_PLAYER) break; // solo provincias propias
-        if(mi>=0&&mi<(int)g_campaign.armies.size()&&g_campaign.armies[mi].owner==FACTION_PLAYER){
+        if(g_campaign.provinces[to].owner!=(FactionId)cf) break; // solo provincias de la facción del remitente
+        if(mi>=0&&mi<(int)g_campaign.armies.size()&&g_campaign.armies[mi].owner==(FactionId)cf){
             if(g_campaign.armies[mi].province==from&&!g_campaign.armies[mi].moved){
-                g_campaign.armies[mi].province=to; g_campaign.armies[mi].moved=true; selectArmy(mi); g_netDirty=true;
+                g_campaign.armies[mi].province=to; g_campaign.armies[mi].moved=true;
+                if(cf==FACTION_PLAYER) selectArmy(mi); // solo seleccionar si es del host
+                g_netDirty=true;
             }
-        } else if(g_campaign.playerProvince==from){
+        } else if(cf==FACTION_PLAYER&&g_campaign.playerProvince==from){
+            // playerProvince solo aplica al host (la capital del cliente se maneja aparte)
             g_campaign.playerProvince=to; g_netDirty=true;
         }
         break;
@@ -123,11 +129,12 @@ static void netHostApplyCmd(const NetCmd& c){
         int prov=c.a,ti=c.b;
         if(prov<0||prov>=(int)g_campaign.provinces.size()) break;
         Province& p=g_campaign.provinces[prov];
-        if(p.owner!=FACTION_PLAYER||!p.hasCity) break;
+        if(p.owner!=(FactionId)cf||!p.hasCity) break;
         if(ti<0||ti>=unitTypeCount()) break;
         const UnitTypeDef& td=g_unitTypes[ti];
         if(td.recruitGold<0) break;
-        Resources& r=g_campaign.res;
+        // PvP: cada facción tiene sus propios recursos (host=res, cliente=clientRes)
+        Resources& r=(cf==FACTION_PLAYER)?g_campaign.res:g_campaign.clientRes;
         if(r.gold<td.recruitGold||r.food<td.recruitFood||r.iron<td.recruitIron) break;
         r.gold-=td.recruitGold; r.food-=td.recruitFood; r.iron-=td.recruitIron;
         g_campaign.recruitQueue.push_back({ti,td.recruitTurns,td.recruitTurns});
@@ -137,7 +144,7 @@ static void netHostApplyCmd(const NetCmd& c){
     case NET_CMD_DISBAND:{
         if(g_state!=STATE_CAMPAIGN_MAP) break;
         int mi=c.a;
-        if(mi>=0&&mi<(int)g_campaign.armies.size()&&g_campaign.armies[mi].owner==FACTION_PLAYER){
+        if(mi>=0&&mi<(int)g_campaign.armies.size()&&g_campaign.armies[mi].owner==(FactionId)cf){
             disbandArmy(mi); g_netDirty=true;
         }
         break;
@@ -147,10 +154,11 @@ static void netHostApplyCmd(const NetCmd& c){
         int to=c.a, mi=c.b;
         if(to<0||to>=(int)g_campaign.provinces.size()) break;
         if(mi<0||mi>=(int)g_campaign.armies.size()) break;
-        if(g_campaign.armies[mi].owner!=FACTION_PLAYER) break;
+        if(g_campaign.armies[mi].owner!=(FactionId)cf) break;
         if(g_campaign.armies[mi].moved) break; // ya movido este turno
         Province& p=g_campaign.provinces[to];
-        if(factionIsPlayerSide(p.owner)) break; // no atacar aliado/propio
+        // no atacar a la propia facción (en PvP el otro jugador es enemigo)
+        if(p.owner==(FactionId)cf) break;
         // adyacencia: provincia del ejército -> objetivo
         int from=g_campaign.armies[mi].province;
         bool adj=false; for(int a:g_campaign.provinces[from].adjacent) if(a==to) adj=true;
@@ -159,7 +167,7 @@ static void netHostApplyCmd(const NetCmd& c){
         // unidades enemigas = guarnición + ejércitos de campo de la facción
         std::vector<std::pair<int,int>> eu=p.army;
         for(auto& fa:g_campaign.armies)
-            if(fa.province==to&&fa.owner==p.owner&&fa.owner!=FACTION_PLAYER)
+            if(fa.province==to&&fa.owner==p.owner&&fa.owner!=(FactionId)cf)
                 for(auto& u:fa.units) eu.push_back(u);
         g_preBattle.provinceIdx=to;
         g_preBattle.isDefense=false;
@@ -183,7 +191,16 @@ static void netHostApplyCmd(const NetCmd& c){
 
 // Un frame de sincronización (llamar 1×/frame cuando hay sesión activa).
 static void netSyncPump(){
-    if(g_netSession.role==NET_ROLE_NONE) return;
+    if(g_netSession.role==NET_ROLE_NONE){
+        g_localFaction=FACTION_PLAYER; // sin sesión: siempre el jugador local
+        return;
+    }
+    // PvP: el cliente controla clientFaction; el host (y co-op) controlan PLAYER
+    if(g_netSession.role==NET_ROLE_CLIENT&&g_campaign.pvpMode&&
+       g_netSession.assignedFaction>=0)
+        g_localFaction=(FactionId)g_netSession.assignedFaction;
+    else
+        g_localFaction=FACTION_PLAYER;
     netSessionPoll();
     if(netIsHost()){
         NetCmd cmds[8];
@@ -207,10 +224,14 @@ static void netSyncPump(){
                 if(applyCampaignSnapshot(g_netSession.snapBuf,g_netSession.snapSize)){
                     netSessionConsumeSnapshot();
                     if(st==STATE_MULTIPLAYER||st==STATE_MAIN_MENU) g_state=STATE_CAMPAIGN_MAP;
+                    // PvP: aplicar facción asignada (del WELCOME) al estado local
+                    if(g_netSession.assignedFaction>=0)
+                        g_campaign.clientFaction=(FactionId)g_netSession.assignedFaction;
                     // Cliente: check victoria/derrota local (mismo umbral que host)
                     int totalProv=(int)g_campaign.provinces.size();
+                    FactionId myF=(g_campaign.pvpMode)?g_campaign.clientFaction:FACTION_PLAYER;
                     int playerProv=0;
-                    for(auto& p:g_campaign.provinces) if(p.owner==FACTION_PLAYER) playerProv++;
+                    for(auto& p:g_campaign.provinces) if(p.owner==myF) playerProv++;
                     if(playerProv>=(int)(totalProv*0.8f)) g_state=STATE_VICTORY;
                     else if(playerProv==0) g_state=STATE_DEFEAT;
                 } else netSessionConsumeSnapshot();
@@ -1188,7 +1209,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                 // Fase J: enemigo = guarnición + ejércitos de campo de la facción
                 std::vector<std::pair<int,int>> tipE=p.army;
                 for(auto& fa:g_campaign.armies)
-                    if(fa.province==i&&fa.owner==p.owner&&fa.owner!=FACTION_PLAYER)
+                    if(fa.province==i&&fa.owner==p.owner&&fa.owner!=g_localFaction)
                         for(auto& u:fa.units) tipE.push_back(u);
                 float db=p.hasCity?p.city.defBonus:1.f;
                 float oc2=predictBattle(tipP,tipE,p.terrain,false,db);
@@ -1219,7 +1240,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                     g_campaign.viewedCity=i;
                     return STATE_CITY_MANAGEMENT;
                 } else if(isAdj){
-                    if(p.owner==FACTION_PLAYER){
+                    if(p.owner==g_localFaction){
                         // Fase J: mover el ejército seleccionado (si aún puede)
                         if(armyCanAct){
                             if(netIsClient()){
@@ -1244,7 +1265,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                         } else {
                         std::vector<std::pair<int,int>> eu=p.army;
                         for(auto& fa:g_campaign.armies)
-                            if(fa.province==i&&fa.owner==p.owner&&fa.owner!=FACTION_PLAYER)
+                            if(fa.province==i&&fa.owner==p.owner&&fa.owner!=g_localFaction)
                                 for(auto& u:fa.units) eu.push_back(u);
                         g_preBattle.provinceIdx=i;
                         g_preBattle.isDefense=false;
@@ -1274,7 +1295,9 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
     if(topBarY<uiPx(4.f)) topBarY=uiPx(4.f);
     DrawRectangle(0,0,SCREEN_W,(int)topBarH,{0,0,0,210});
     DrawText(TextFormat("Turn: %d",g_campaign.turn),(int)uiPx(10.f),(int)topBarY,14,C_GOLD);
-    Resources& r=g_campaign.res;
+    // PvP: el cliente ve sus propios recursos (clientRes); host/co-op ven res
+    Resources& r=(g_campaign.pvpMode&&g_netSession.role==NET_ROLE_CLIENT)
+                 ?g_campaign.clientRes:g_campaign.res;
     int turnW=MeasureText(TextFormat("Turn: %d",g_campaign.turn),14);
     float resX=uiPx(10.f)+(float)turnW+uiPx(24.f);
     DrawText(TextFormat("Gold: %.0f  Food: %.0f  Wood: %.0f  Stone: %.0f  Iron: %.0f",
@@ -1296,12 +1319,12 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
 
     // Fase J: estado del ejército seleccionado (esquina superior derecha)
     if(g_campaign.selectedArmy>=0&&g_campaign.selectedArmy<(int)g_campaign.armies.size()
-       &&g_campaign.armies[g_campaign.selectedArmy].owner==FACTION_PLAYER){
+       &&g_campaign.armies[g_campaign.selectedArmy].owner==g_localFaction){
         FieldArmy& sa=g_campaign.armies[g_campaign.selectedArmy];
-        // Numeración propia: solo ejércitos del jugador (los IA no cuentan)
+        // Numeración propia: solo ejércitos de la facción local (los IA no cuentan)
         int ord=0,ptot=0;
         for(int i=0;i<(int)g_campaign.armies.size();i++){
-            if(g_campaign.armies[i].owner!=FACTION_PLAYER) continue;
+            if(g_campaign.armies[i].owner!=g_localFaction) continue;
             ptot++;
             if(i==g_campaign.selectedArmy) ord=ptot;
         }
@@ -1327,10 +1350,10 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
         }else{
         bool pending=processTurn(); // Fase J: true = la IA ataca => pre-battle
         netMarkDirty(); // Fase H: retransmitir a los clientes
-        // Check victory/defeat after processing
+        // Check victory/defeat after processing (facción local: PLAYER o clientFaction en PvP)
         int totalProv=(int)g_campaign.provinces.size();
         int playerProv=0;
-        for(auto& p:g_campaign.provinces) if(p.owner==FACTION_PLAYER) playerProv++;
+        for(auto& p:g_campaign.provinces) if(p.owner==g_localFaction) playerProv++;
         if(playerProv>=(int)(totalProv*0.8f)){
             return STATE_VICTORY;
         }
@@ -1383,7 +1406,9 @@ GameState updateDrawCityManagement(Vector2 mouse){
     Province& prov=g_campaign.provinces[g_campaign.viewedCity];
     if(!prov.hasCity) return STATE_CAMPAIGN_MAP;
     City& city=prov.city;
-    Resources& res=g_campaign.res;
+    // PvP: el cliente gestiona sus recursos (clientRes); host/co-op usan res
+    Resources& res=(g_campaign.pvpMode&&g_netSession.role==NET_ROLE_CLIENT)
+                   ?g_campaign.clientRes:g_campaign.res;
 
     ClearBackground({12,10,8,255});
     // City illustration (procedural schematic)
@@ -1539,7 +1564,8 @@ GameState updateDrawRecruitment(Vector2 mouse){
         return STATE_CAMPAIGN_MAP;
     Province& prov=g_campaign.provinces[g_campaign.viewedCity];
     City& city=prov.city;
-    Resources& res=g_campaign.res;
+    Resources& res=(g_campaign.pvpMode&&g_netSession.role==NET_ROLE_CLIENT)
+                   ?g_campaign.clientRes:g_campaign.res;
 
     ClearBackground(C_BG);
     for(int gx=0;gx<SCREEN_W;gx+=40) DrawLine(gx,0,gx,SCREEN_H,{18,14,10,50});
@@ -2382,7 +2408,8 @@ GameState updateDrawMarketplace(Vector2 mouse){
     DrawText("MARKETPLACE — Trade Resources",14,10,26,C_GOLD);
     DrawText(TextFormat("Turn: %d  |  Current reserves shown below",g_campaign.turn),14,38,12,C_SECONDARY);
 
-    Resources& res=g_campaign.res;
+    Resources& res=(g_campaign.pvpMode&&g_netSession.role==NET_ROLE_CLIENT)
+                   ?g_campaign.clientRes:g_campaign.res;
     static const char* resNames[5]={"Gold","Food","Wood","Stone","Iron"};
     static const Color resColors[5]={{200,165,80,255},{140,100,50,255},{100,150,60,255},
                                        {160,150,140,255},{200,100,50,255}};
@@ -2506,7 +2533,8 @@ GameState updateDrawDiplomacy(Vector2 mouse){
 
     DrawRectangle(0,0,SCREEN_W,50,{0,0,0,220});
     DrawText("DIPLOMACY - Alliances and Trade",14,6,26,C_GOLD);
-    Resources& res=g_campaign.res;
+    Resources& res=(g_campaign.pvpMode&&g_netSession.role==NET_ROLE_CLIENT)
+                   ?g_campaign.clientRes:g_campaign.res;
     DrawText(TextFormat("Turn: %d  |  Gold: %.0f  Food: %.0f  Wood: %.0f  Stone: %.0f  Iron: %.0f",
              g_campaign.turn,res.gold,res.food,res.wood,res.stone,res.iron),
              14,36,12,C_SECONDARY);
@@ -2826,6 +2854,7 @@ GameState updateDrawMultiplayer(Vector2 mouse){
         if(g_netSession.role==NET_ROLE_HOST){
             netSessionStop();
         }else if(g_netSession.role==NET_ROLE_NONE){
+            g_netSession.pvpMode=g_campaign.pvpMode; // PvP: asignar faccion al cliente al JOIN
             netSessionHostStart();
         }
     }

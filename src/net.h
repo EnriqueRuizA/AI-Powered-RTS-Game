@@ -16,6 +16,17 @@ typedef uintptr_t NetSock;
 #define NET_PORT          7777
 #define NET_PROTO_VERSION 1
 
+// Facciones (espejo del enum FactionId en config.h; net.h no puede incluir
+// config.h porque trae raylib.h y choca con winsock2.h en la misma TU).
+// Valores identicos a config.h:88 para que el payload WELCOME sea portable.
+#define NET_FACTION_PLAYER      0
+#define NET_FACTION_AGGRESSIVE  1
+#define NET_FACTION_DEFENSIVE   2
+#define NET_FACTION_COMMERCIAL  3
+#define NET_FACTION_PIRATE      4
+#define NET_FACTION_NEUTRAL     5
+#define NET_FACTION_COUNT       6
+
 // WSAStartup/WSAStartup-equivalente. Idempotente; true si OK.
 bool netInit();
 // Deshace netInit (WSACleanup). Idempotente.
@@ -104,6 +115,7 @@ enum NetCmdType : unsigned char {
 struct NetCmd {
     unsigned char cmd=0;
     int a=0, b=0, c=0;
+    int faction=0;  // PvP: facción del remitente (host la rellena al recibir)
 };
 
 // Envia NetSnapMsg validado (magic/version). Devuelve true si OK.
@@ -167,6 +179,10 @@ struct NetSession {
     uint16_t pendingCmdSeq= 0;       // seq del comando pendiente (0 = ninguno)
     int     pendingCmdTick= 0;       // tick en que se envio por ultima vez
     int     pendingCmdTry = 0;       // intentos de envio (max 5)
+    // PvP: host asigna faccion al cliente al hacer JOIN; el cliente la
+    // aprende del WELCOME (o del snapshot). -1 = co-op (sin PvP).
+    bool    pvpMode        = false;  // host: PvP activo (asignar faccion)
+    int     assignedFaction= -1;     // cliente: faccion que controla (-1 = co-op)
 };
 extern NetSession g_netSession;
 
