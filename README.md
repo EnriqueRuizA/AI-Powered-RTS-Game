@@ -43,6 +43,14 @@ procedurales originales (fallback automático).
 - Resolución, volumen, dificultad e idioma se ajustan desde el menú o el `.ini`.
 - Default único de resolución: **1280×768**; sin `.ini` el juego arranca con los defaults.
 
+## Guardado de partidas
+
+- Botón **SAVE** en la barra inferior del mapa de campaña, o tecla **F5**.
+- **MENU** (volver al menú principal) guarda automáticamente.
+- Auto-guardado al cerrar el juego si hay campaña activa (cualquier turno).
+- Archivos: `campaign_0.dat` … `campaign_3.dat` + `campaign_last.dat`
+  (campaña recordada para **CONTINUE**). Formato binario `SAVE_VERSION=10`.
+
 ## Estructura
 
 - `src/` — 18 módulos `.cpp` + 17 headers `.h` (reestructuración FASE 1 + fases

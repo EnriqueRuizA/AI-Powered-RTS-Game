@@ -994,6 +994,12 @@ const float ARMY_MOVE_DURATION = 0.9f;
 GameState updateDrawCampaignMap(Vector2 mouse,float dt){
     updateProvinceCenters();
 
+    // F5: guardar partida en cualquier momento (feedback breve en consola)
+    if(IsKeyPressed(KEY_F5)){
+        if(saveGame()) printf("[SAVE] Game saved to %s\n",getCampaignSavePath(g_campaign.campaignId));
+        else printf("[SAVE] ERROR: could not write %s\n",getCampaignSavePath(g_campaign.campaignId));
+    }
+
     // Army movement animation: advance and complete when done
     bool armyMoving = (g_campaign.armyMoveFrom>=0 && g_campaign.armyMoveTo>=0);
     if(armyMoving){
@@ -1404,8 +1410,19 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
             }
         }
     }
-    if(drawSmBtn({(float)(SCREEN_W-uiPx(130.f)),btnY,bw,bh},"MENU",mouse,
-                  {50,20,20,255},{90,38,38,255})) return STATE_MAIN_MENU;
+    // SAVE + MENU (guardar antes de salir al menú principal)
+    {
+        float mX=(float)(SCREEN_W-uiPx(130.f));
+        float sX=mX-uiPx(10.f)-bw;
+        if(drawSmBtn({sX,btnY,bw,bh},"SAVE",mouse,{20,50,20,255},{40,90,38,255})){
+            saveGame(); // g_hasSave se actualiza dentro de saveGame()
+        }
+        if(drawSmBtn({mX,btnY,bw,bh},"MENU",mouse,
+                      {50,20,20,255},{90,38,38,255})){
+            saveGame(); // guardar al volver al menú principal
+            return STATE_MAIN_MENU;
+        }
+    }
 
     return STATE_CAMPAIGN_MAP;
 }
@@ -3107,8 +3124,8 @@ int main(int argc, char** argv){
     for(auto& t:g_enemyTextures) UnloadTexture(t);
     unloadUnitSheets();
 
-    // Auto-save on exit if campaign active
-    if(g_campaign.turn>1) saveGame();
+    // Auto-save on exit if campaign active (any turn, not just >1)
+    if(!g_campaign.provinces.empty()) saveGame();
 
     netSessionStop();   // Fase G: cierra socket de red si quedaba abierto
     shutdownAudio();

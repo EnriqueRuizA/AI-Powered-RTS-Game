@@ -1,4 +1,4 @@
-// src/save.h — Serialización binaria (formato actual: binario con SAVE_VERSION=8)
+// src/save.h — Serialización binaria (formato actual: binario con SAVE_VERSION=10)
 #pragma once
 
 #include <vector>
@@ -10,7 +10,7 @@ inline const int   MAX_CAMPAIGNS      = 4;
 inline const char* CAMPAIGN_NAMES[MAX_CAMPAIGNS] = { "The Realm", "Northern Isles", "Eastern March", "Great Continent" };
 
 const char* getCampaignSavePath(int id);
-void saveGame();
+bool saveGame();        // true si el guardado en disco tuvo éxito
 bool loadGame();
 
 // Fase H: el mismo formato binario SAVE_VERSION=8 ahora se serializa a un

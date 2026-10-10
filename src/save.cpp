@@ -283,18 +283,20 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
     return b.ok;
 }
 
-void saveGame(){
+bool saveGame(){
     const char* path=getCampaignSavePath(g_campaign.campaignId);
     std::vector<char> blob;
-    if(!serializeCampaignState(g_campaign,blob)) return;
+    if(!serializeCampaignState(g_campaign,blob)) return false;
     FILE* f=fopen(path,"wb");
-    if(!f) return;
-    fwrite(blob.data(),1,blob.size(),f);
+    if(!f) return false;
+    size_t written=fwrite(blob.data(),1,blob.size(),f);
     fclose(f);
+    if(written!=blob.size()) return false;
     g_hasSave=true;
     // Remember last played campaign for Continue
     FILE* lf=fopen(CAMPAIGN_LAST_FILE,"wb");
     if(lf){ fwrite(&g_campaign.campaignId,sizeof(int),1,lf); fclose(lf); }
+    return true;
 }
 
 bool loadGame(){
