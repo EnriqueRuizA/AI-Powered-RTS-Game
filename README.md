@@ -93,9 +93,11 @@ procedurales originales (fallback automático).
     remitente (`NetCmd.faction`) y usa `clientRes` para el reclutamiento del
     cliente. El cliente usa `g_localFaction`/`clientRes` para selección,
     recursos y UI; la IA salta la facción humana del cliente
-    (`factionIsHuman`). **Desactivado por defecto** (`pvpMode=false`;
-    co-op sigue siendo el modo por defecto; la opción de lobby para activar
-    PvP está pendiente).
+    (`factionIsHuman`). **Activación**: botón "PVP: TWO KINGDOMS" en el
+    lobby multiplayer (alterna `pvpMode` antes de HOST; desactivado por
+    defecto, co-op es el modo por defecto). **Limitación**: la reserva y la
+    cola de reclutamiento se comparten entre facciones (fix futuro:
+    reservas por facción, SAVE_VERSION=10).
 - Roadmap: F protocolo de sesión ✅ → G lobby ✅ → H sincronización ✅
   (incluye H2 ataques y PvP dos reinos). Detalle en `PLAN.md` §12.
 

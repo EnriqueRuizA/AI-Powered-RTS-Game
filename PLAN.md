@@ -1222,9 +1222,13 @@ mínimo entre host y cliente:
   `g_localFaction`/`clientRes`. `factionIsHuman` hace que la IA salte la
   facción humana del cliente (coalición, refuerzos, ejércitos de campo) y
   `processTurn` da income a `clientRes` para sus ciudades. Check de
-  victoria/derrota local usa la facción propia. **Desactivado por
-  defecto**: `pvpMode=false` en `newCampaign` (co-op sigue siendo el modo
-  por defecto; PvP se activará con una opción de lobby pendiente).
+  victoria/derrota local usa la facción propia. **Activación**: botón
+  "PVP: TWO KINGDOMS" en el lobby multiplayer (alterna `pvpMode` antes de
+  hacer HOST; desactivado por defecto, co-op sigue siendo el modo por
+  defecto). **Limitación conocida**: la reserva (`g_campaign.reserve`) y la
+  cola de reclutamiento se comparten (las tropas reclutadas por el cliente
+  acaban en la reserva común); un fix futuro requeriría reservas por
+  facción (SAVE_VERSION=10).
 - `runSyncTest` vive en `src/sync_test.cpp` (incluye `campaign.h`/`raylib.h`,
   sin winsock; usa `std::this_thread::sleep_for`) para evitar el choque
   raylib.h vs windows.h. `-nettest` ampliado: `rc4=runSyncTest()`, exit 0
