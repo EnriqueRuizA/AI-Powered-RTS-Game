@@ -279,6 +279,61 @@ int runSyncTest(){
         netSessionStop();
     }
 
+    // 5) PvP: al hacer JOIN con pvpMode, el host asigna faccion y la
+    //    comunica en el WELCOME ("v1 f<N>"); el cliente la parsea.
+    if(ok){
+        g_netSession.pvpMode=true;
+        if(!netSessionHostStart()){
+            printf("SYNC FAIL - hostStart PvP (%s)\n",g_netSession.status);
+            g_netSession.pvpMode=false;
+            netShutdown();
+            return 1;
+        }
+        unsigned short cliPort2=0;
+        NetSock cli2=netOpen(0,&cliPort2);
+        if(cli2==NET_INVALID){
+            printf("SYNC FAIL - socket cliente PvP\n");
+            g_netSession.pvpMode=false;
+            netSessionStop(); netShutdown();
+            return 1;
+        }
+        NetMsg j2={};
+        j2.type=NET_MSG_JOIN; j2.seq=1;
+        snprintf(j2.payload,sizeof j2.payload,"join");
+        if(!netSendMsg(cli2,"127.0.0.1",(unsigned short)NET_PORT,j2)){
+            printf("SYNC FAIL - send JOIN PvP\n");
+            ok=false;
+        }
+        for(int i=0;i<100&&ok&&g_netSession.playerCount<2;i++){ netSessionPoll(); syncSleepMs(10); }
+        if(ok&&g_netSession.playerCount<2){
+            printf("SYNC FAIL - PvP: host no registro cliente\n");
+            ok=false;
+        }
+        // Cliente crudo recibe WELCOME y parsea la faccion asignada
+        int gotFaction=-1;
+        for(int i=0;i<100&&ok&&gotFaction<0;i++){
+            NetMsg wm={};
+            if(netRecvMsg(cli2,&wm,10)==1&&wm.type==NET_MSG_WELCOME){
+                int vf=0,ff=-1;
+                if(sscanf(wm.payload,"v%d f%d",&vf,&ff)==2&&ff>=0&&ff<NET_FACTION_COUNT)
+                    gotFaction=ff;
+                else{
+                    printf("SYNC FAIL - PvP: WELCOME sin faccion (payload='%s')\n",wm.payload);
+                    ok=false;
+                }
+            }else syncSleepMs(10);
+        }
+        if(ok&&gotFaction<0){
+            printf("SYNC FAIL - PvP: sin WELCOME/faccion\n");
+            ok=false;
+        }else if(ok){
+            printf("SYNC: PvP faccion asignada = %d\n",gotFaction);
+        }
+        netClose(cli2);
+        netSessionStop();
+        g_netSession.pvpMode=false; // restaurar (co-op por defecto)
+    }
+
     netShutdown();
     if(ok){
         printf("SYNC PASS\n");
