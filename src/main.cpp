@@ -2846,6 +2846,18 @@ GameState updateDrawMultiplayer(Vector2 mouse){
     }
 
     float bh=uiPx(44.f);
+    // PvP toggle (solo antes de iniciar sesion; decide el modo al hacer HOST)
+    {
+        bool pvpOn=g_campaign.pvpMode;
+        bool canTog=(g_netSession.role==NET_ROLE_NONE);
+        const char* pvpLbl=pvpOn?"PVP: TWO KINGDOMS (ON)":"PVP: TWO KINGDOMS (OFF)";
+        Color pvpN=canTog?(pvpOn?Color{50,40,20,255}:Color{30,30,30,255}):Color{22,22,22,255};
+        Color pvpH=canTog?(pvpOn?Color{90,70,30,255}:Color{50,50,50,255}):Color{22,22,22,255};
+        if(drawButton({cx,cy,cw,bh*0.85f},pvpLbl,mouse,pvpN,pvpH)&&canTog){
+            g_campaign.pvpMode=!g_campaign.pvpMode;
+        }
+        cy+=bh*0.85f+uiPx(10.f);
+    }
     // HOST / STOP
     const char* hostLbl = (g_netSession.role==NET_ROLE_HOST)?"STOP HOSTING":"HOST GAME";
     Color hostN = (g_netSession.role==NET_ROLE_HOST)?Color{55,25,25,255}:Color{40,55,40,255};
