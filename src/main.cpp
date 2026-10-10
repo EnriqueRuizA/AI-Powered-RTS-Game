@@ -149,6 +149,20 @@ static void netHostApplyCmd(const NetCmd& c){
         }
         break;
     }
+    case NET_CMD_FORM_ARMY:{ // PvP: forma ejército de la facción del remitente
+        if(g_state!=STATE_CAMPAIGN_MAP) break;
+        int prov=c.a;
+        if(prov<0||prov>=(int)g_campaign.provinces.size()) break;
+        if(formArmyAt(prov,cf)) g_netDirty=true;
+        break;
+    }
+    case NET_CMD_JOIN_ARMY:{ // PvP: une reserva de la facción a su ejército
+        if(g_state!=STATE_CAMPAIGN_MAP) break;
+        int prov=c.a;
+        if(prov<0||prov>=(int)g_campaign.provinces.size()) break;
+        joinArmyAt(prov,cf); g_netDirty=true;
+        break;
+    }
     case NET_CMD_ATTACK:{ // H2: host entra en PRE_BATTLE y resuelve la batalla
         if(g_state!=STATE_CAMPAIGN_MAP) break; // host ocupado
         int to=c.a, mi=c.b;
@@ -1536,16 +1550,28 @@ GameState updateDrawCityManagement(Vector2 mouse){
         int armyHere=armyIndexAt(g_campaign.viewedCity,g_localFaction);
         if(resHeroes>0){
             if(drawSmBtn({(float)(SCREEN_W-530),(float)(SCREEN_H-38),120,30},"FORM ARMY",mouse,
-                         Color{20,50,20,255},Color{40,90,38,255})&&netCanEdit()){
-                formArmyAt(g_campaign.viewedCity);
-                netMarkDirty();
+                         Color{20,50,20,255},Color{40,90,38,255})){
+                if(netIsClient()){
+                    // PvP/co-op: el cliente pide formar ejército al host
+                    NetCmd fc; fc.cmd=NET_CMD_FORM_ARMY; fc.a=g_campaign.viewedCity; fc.b=fc.c=0;
+                    netSessionSendCmd(fc);
+                }else{
+                    formArmyAt(g_campaign.viewedCity);
+                    netMarkDirty();
+                }
             }
         }
         if(armyHere>=0&&resNonHero>0){
             if(drawSmBtn({(float)(SCREEN_W-400),(float)(SCREEN_H-38),120,30},"JOIN ARMY",mouse,
-                         Color{20,50,20,255},Color{40,90,38,255})&&netCanEdit()){
-                joinArmyAt(g_campaign.viewedCity);
-                netMarkDirty();
+                         Color{20,50,20,255},Color{40,90,38,255})){
+                if(netIsClient()){
+                    // PvP/co-op: el cliente pide unir reserva al host
+                    NetCmd jc; jc.cmd=NET_CMD_JOIN_ARMY; jc.a=g_campaign.viewedCity; jc.b=jc.c=0;
+                    netSessionSendCmd(jc);
+                }else{
+                    joinArmyAt(g_campaign.viewedCity);
+                    netMarkDirty();
+                }
             }
         }
     }

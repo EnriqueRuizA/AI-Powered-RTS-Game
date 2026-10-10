@@ -157,16 +157,17 @@ std::vector<std::pair<int,int>> subtractEnemyLosses(
     return out;
 }
 
-bool formArmyAt(int province){
-    // Requiere 1 general (o el rey) en la reserva de la facción local
-    auto& resv=localReserve();
+bool formArmyAt(int province, int faction){
+    // Requiere 1 general (o el rey) en la reserva de la facción
+    FactionId fo=(faction>=0)?(FactionId)faction:g_localFaction;
+    auto& resv=(fo==FACTION_PLAYER)?g_campaign.reserve:g_campaign.clientReserve;
     int gi=-1;
     for(int i=0;i<(int)resv.size();i++)
         if(isHeroType(resv[i].first)){ gi=i; break; }
     if(gi<0) return false;
     FieldArmy a;
     a.id=g_campaign.nextArmyId++;
-    a.owner=g_localFaction; // PvP: el ejército pertenece a la facción local
+    a.owner=fo; // PvP: el ejército pertenece a la facción indicada
     a.province=province;
     a.units.push_back(resv[gi]);
     resv.erase(resv.begin()+gi);
@@ -182,10 +183,11 @@ bool formArmyAt(int province){
     return true;
 }
 
-void joinArmyAt(int province){
-    int ai=armyIndexAt(province,g_localFaction);
+void joinArmyAt(int province, int faction){
+    FactionId fo=(faction>=0)?(FactionId)faction:g_localFaction;
+    int ai=armyIndexAt(province,fo);
     if(ai<0) return;
-    auto& resv=localReserve();
+    auto& resv=(fo==FACTION_PLAYER)?g_campaign.reserve:g_campaign.clientReserve;
     std::vector<std::pair<int,int>> heroes;
     for(auto& u:resv){
         if(isHeroType(u.first)) heroes.push_back(u);

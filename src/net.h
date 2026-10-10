@@ -109,7 +109,9 @@ enum NetCmdType : unsigned char {
     NET_CMD_RECRUIT   = 3,  // a=provinceIdx, b=typeIdx
     NET_CMD_DISBAND   = 4,  // a=armyIdx
     NET_CMD_SYNC_REQ  = 5,  // cliente pide snapshot completo
-    NET_CMD_ATTACK    = 6   // H2: a=targetProvince, b=armyIdx (host entra en PRE_BATTLE)
+    NET_CMD_ATTACK    = 6,  // H2: a=targetProvince, b=armyIdx (host entra en PRE_BATTLE)
+    NET_CMD_FORM_ARMY = 7,  // PvP: a=province (host forma ejército de la facción del remitente)
+    NET_CMD_JOIN_ARMY = 8   // PvP: a=province (host une reserva al ejército de la facción)
 };
 
 struct NetCmd {

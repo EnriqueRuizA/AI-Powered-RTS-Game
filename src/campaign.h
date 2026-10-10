@@ -179,8 +179,8 @@ void drawCampaignMovementArrows();               // (:849)
 // Fase J: ejércitos de campo
 int  armyIndexAt(int province, FactionId owner);      // primer ejército de `owner` en provincia (-1)
 void selectArmy(int idx);                             // sincroniza readyUnits + playerProvince
-bool formArmyAt(int province);                        // consume 1 general de la reserva + tropas no-héroe
-void joinArmyAt(int province);                        // reserva (no-héroes) -> ejército existente
+bool formArmyAt(int province, int faction=-1);   // consume 1 general de la reserva + tropas no-héroe (-1 = g_localFaction)
+void joinArmyAt(int province, int faction=-1);   // reserva (no-héroes) -> ejército existente (-1 = g_localFaction)
 void disbandArmy(int idx);                            // ejército -> reserva
 int  armySoldiers(const std::vector<std::pair<int,int>>& units);
 int  defenseSoldiers(int province);                   // soldados del jugador en la provincia
