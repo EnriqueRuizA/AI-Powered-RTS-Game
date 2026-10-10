@@ -117,7 +117,7 @@ void saveSettings();
 void loadSettings();
 
 // === GUARDADO ===
-inline const int SAVE_VERSION = 9;   // 9: PvP (pvpMode + clientFaction + clientRes)
+inline const int SAVE_VERSION = 10;  // 10: PvP reserva por facción (clientReserve + RecruitEntry.faction)
 
 // === ESTADO GLOBAL (:681-684) ===
 extern GameState g_state;

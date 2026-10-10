@@ -95,9 +95,10 @@ procedurales originales (fallback automático).
     recursos y UI; la IA salta la facción humana del cliente
     (`factionIsHuman`). **Activación**: botón "PVP: TWO KINGDOMS" en el
     lobby multiplayer (alterna `pvpMode` antes de HOST; desactivado por
-    defecto, co-op es el modo por defecto). **Limitación**: la reserva y la
-    cola de reclutamiento se comparten entre facciones (fix futuro:
-    reservas por facción, SAVE_VERSION=10).
+    defecto, co-op es el modo por defecto). **Reserva por facción**
+    (SAVE_VERSION=10): `clientReserve` separada; cada reclutamiento se
+    enruta a la reserva de su facción (`RecruitEntry.faction`); formar/
+    unir/disolver ejércitos y la UI usan la reserva de la facción local.
 - Roadmap: F protocolo de sesión ✅ → G lobby ✅ → H sincronización ✅
   (incluye H2 ataques y PvP dos reinos). Detalle en `PLAN.md` §12.
 

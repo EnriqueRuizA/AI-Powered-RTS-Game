@@ -41,6 +41,7 @@ struct RecruitEntry {
     int typeIdx;
     int turnsLeft;
     int originalTurns;  // 4.3: for progress bar
+    int faction=0;      // PvP: facción que recluta ( enruta a su reserva )
 };
 
 // Fase J: ejércitos de campo (múltiples ejércitos estilo Shogun 2)
@@ -75,6 +76,7 @@ struct CampaignState {
     // Fase J: unidades sin asignar en reserva (reclutamiento + generales);
     // readyUnits es ahora una VISTA del ejército seleccionado
     std::vector<std::pair<int,int>> reserve;
+    std::vector<std::pair<int,int>> clientReserve; // PvP: reserva del cliente (separada)
     std::vector<std::pair<int,int>> readyUnits;
     // Fase J: múltiples ejércitos de campo (jugador + IA)
     std::vector<FieldArmy> armies;

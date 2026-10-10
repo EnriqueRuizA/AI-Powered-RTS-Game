@@ -137,7 +137,7 @@ static void netHostApplyCmd(const NetCmd& c){
         Resources& r=(cf==FACTION_PLAYER)?g_campaign.res:g_campaign.clientRes;
         if(r.gold<td.recruitGold||r.food<td.recruitFood||r.iron<td.recruitIron) break;
         r.gold-=td.recruitGold; r.food-=td.recruitFood; r.iron-=td.recruitIron;
-        g_campaign.recruitQueue.push_back({ti,td.recruitTurns,td.recruitTurns});
+        g_campaign.recruitQueue.push_back({ti,td.recruitTurns,td.recruitTurns,cf}); // PvP: facción del remitente
         g_netDirty=true;
         break;
     }
@@ -1525,13 +1525,15 @@ GameState updateDrawCityManagement(Vector2 mouse){
              res.gold,res.food,res.wood,res.stone,res.iron),14,SCREEN_H-34,13,C_PARCHMENT);
 
     // Fase J: reservas → formar/unir ejército (requiere general en reserva)
+    // PvP: el cliente usa su propia reserva (clientReserve) y facción local
     {
+        auto& resv=(g_localFaction==FACTION_PLAYER)?g_campaign.reserve:g_campaign.clientReserve;
         int resNonHero=0,resHeroes=0;
-        for(auto& u:g_campaign.reserve){
+        for(auto& u:resv){
             if(u.first==UNIT_GENERAL||u.first==UNIT_KING) resHeroes++;
             else resNonHero+=u.second;
         }
-        int armyHere=armyIndexAt(g_campaign.viewedCity,FACTION_PLAYER);
+        int armyHere=armyIndexAt(g_campaign.viewedCity,g_localFaction);
         if(resHeroes>0){
             if(drawSmBtn({(float)(SCREEN_W-530),(float)(SCREEN_H-38),120,30},"FORM ARMY",mouse,
                          Color{20,50,20,255},Color{40,90,38,255})&&netCanEdit()){
@@ -1621,7 +1623,7 @@ GameState updateDrawRecruitment(Vector2 mouse){
                     netSessionSendCmd(rc);
                 }else{
                     res.gold-=td.recruitGold; res.food-=td.recruitFood; res.iron-=td.recruitIron;
-                    g_campaign.recruitQueue.push_back({t,td.recruitTurns,td.recruitTurns});
+                    g_campaign.recruitQueue.push_back({t,td.recruitTurns,td.recruitTurns,(int)g_localFaction});
                     netMarkDirty();
                 }
             }
@@ -1662,8 +1664,10 @@ GameState updateDrawRecruitment(Vector2 mouse){
 
     DrawLine((int)rx,SCREEN_H/2,(int)SCREEN_W,SCREEN_H/2,{60,50,35,80});
     DrawText("Reserve (unassigned):",(int)(rx+10),(int)(SCREEN_H/2+8),13,C_PARCHMENT);
-    for(int i=0;i<(int)g_campaign.reserve.size();i++){
-        auto [ti,cnt]=g_campaign.reserve[i];
+    // PvP: el cliente ve su propia reserva (clientReserve)
+    auto& resvUI=(g_localFaction==FACTION_PLAYER)?g_campaign.reserve:g_campaign.clientReserve;
+    for(int i=0;i<(int)resvUI.size();i++){
+        auto [ti,cnt]=resvUI[i];
         if(ti>=unitTypeCount()) continue;
         const UnitTypeDef& td2=g_unitTypes[ti];
         float ry=SCREEN_H/2+30.f+i*28.f;

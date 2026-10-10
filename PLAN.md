@@ -1225,10 +1225,13 @@ mínimo entre host y cliente:
   victoria/derrota local usa la facción propia. **Activación**: botón
   "PVP: TWO KINGDOMS" en el lobby multiplayer (alterna `pvpMode` antes de
   hacer HOST; desactivado por defecto, co-op sigue siendo el modo por
-  defecto). **Limitación conocida**: la reserva (`g_campaign.reserve`) y la
-  cola de reclutamiento se comparten (las tropas reclutadas por el cliente
-  acaban en la reserva común); un fix futuro requeriría reservas por
-  facción (SAVE_VERSION=10).
+  defecto). **Reserva por facción (SAVE_VERSION=10)**: `clientReserve`
+  separada de `reserve`; `RecruitEntry.faction` enruta cada reclutamiento
+  completado a la reserva de su facción; `formArmyAt`/`joinArmyAt`/
+  `disbandArmy`/UI usan la reserva de `g_localFaction`; el mantenimiento de
+  las tropas del cliente descuenta de `clientRes`; `factionMilitaryPower`
+  cuenta la reserva del cliente en su facción. Deserialize acepta v8/v9
+  (defaults) o v10 (campos extra al final del stream).
 - `runSyncTest` vive en `src/sync_test.cpp` (incluye `campaign.h`/`raylib.h`,
   sin winsock; usa `std::this_thread::sleep_for`) para evitar el choque
   raylib.h vs windows.h. `-nettest` ampliado: `rc4=runSyncTest()`, exit 0

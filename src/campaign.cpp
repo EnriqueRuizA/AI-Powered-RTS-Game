@@ -34,6 +34,10 @@ int g_selectedProvince  = -1;  // 4.5: pulsing selected province
 //  cada faccion enemiga conserva el suyo bien visible.
 // ───────────────────────────────────────────────────────────────────────────
 FactionId g_localFaction=FACTION_PLAYER; // main.cpp la actualiza segun el rol de red
+// Reserva de la facción local (PLAYER o clientFaction en PvP)
+static std::vector<std::pair<int,int>>& localReserve(){
+    return (g_localFaction==FACTION_PLAYER)?g_campaign.reserve:g_campaign.clientReserve;
+}
 bool factionIsPlayerSide(FactionId f){
     if(f==FACTION_PLAYER) return true;
     if((int)f<0||(int)f>=FACTION_COUNT) return false;
@@ -154,44 +158,47 @@ std::vector<std::pair<int,int>> subtractEnemyLosses(
 }
 
 bool formArmyAt(int province){
-    // Requiere 1 general (o el rey) en la reserva
+    // Requiere 1 general (o el rey) en la reserva de la facción local
+    auto& resv=localReserve();
     int gi=-1;
-    for(int i=0;i<(int)g_campaign.reserve.size();i++)
-        if(isHeroType(g_campaign.reserve[i].first)){ gi=i; break; }
+    for(int i=0;i<(int)resv.size();i++)
+        if(isHeroType(resv[i].first)){ gi=i; break; }
     if(gi<0) return false;
     FieldArmy a;
     a.id=g_campaign.nextArmyId++;
-    a.owner=FACTION_PLAYER;
+    a.owner=g_localFaction; // PvP: el ejército pertenece a la facción local
     a.province=province;
-    a.units.push_back(g_campaign.reserve[gi]);
-    g_campaign.reserve.erase(g_campaign.reserve.begin()+gi);
+    a.units.push_back(resv[gi]);
+    resv.erase(resv.begin()+gi);
     // Tropas no-héroe de la reserva se unen al nuevo ejército
     std::vector<std::pair<int,int>> heroes;
-    for(auto& u:g_campaign.reserve){
+    for(auto& u:resv){
         if(isHeroType(u.first)) heroes.push_back(u);
         else a.units.push_back(u);
     }
-    g_campaign.reserve=std::move(heroes);
+    resv=std::move(heroes);
     g_campaign.armies.push_back(a);
     selectArmy((int)g_campaign.armies.size()-1);
     return true;
 }
 
 void joinArmyAt(int province){
-    int ai=armyIndexAt(province,FACTION_PLAYER);
+    int ai=armyIndexAt(province,g_localFaction);
     if(ai<0) return;
+    auto& resv=localReserve();
     std::vector<std::pair<int,int>> heroes;
-    for(auto& u:g_campaign.reserve){
+    for(auto& u:resv){
         if(isHeroType(u.first)) heroes.push_back(u);
         else g_campaign.armies[ai].units.push_back(u);
     }
-    g_campaign.reserve=std::move(heroes);
+    resv=std::move(heroes);
     if(g_campaign.selectedArmy==ai) g_campaign.readyUnits=g_campaign.armies[ai].units;
 }
 
 void disbandArmy(int idx){
     if(idx<0||idx>=(int)g_campaign.armies.size()) return;
-    for(auto& u:g_campaign.armies[idx].units) g_campaign.reserve.push_back(u);
+    auto& resv=localReserve(); // PvP: vuelve a la reserva de su facción
+    for(auto& u:g_campaign.armies[idx].units) resv.push_back(u);
     g_campaign.armies.erase(g_campaign.armies.begin()+idx);
     int nxt=(int)g_campaign.armies.size();
     selectArmy(nxt==0?-1:std::min(idx,nxt-1));
@@ -634,7 +641,12 @@ bool processTurn(){
     for(auto& e:g_campaign.recruitQueue){
         e.turnsLeft--;
         if(e.turnsLeft<=0){
-            g_campaign.reserve.push_back({e.typeIdx,e.typeIdx<(int)g_unitTypes.size()?g_unitTypes[e.typeIdx].soldierCount:40});
+            int cnt=e.typeIdx<(int)g_unitTypes.size()?g_unitTypes[e.typeIdx].soldierCount:40;
+            // PvP: enrutar a la reserva de la facción que reclutó
+            if(e.faction==FACTION_PLAYER||!g_campaign.pvpMode)
+                g_campaign.reserve.push_back({e.typeIdx,cnt});
+            else
+                g_campaign.clientReserve.push_back({e.typeIdx,cnt});
             battleLogAdd(TextFormat("[T%d] %s recruitment complete!", g_campaign.turn, g_unitTypes[e.typeIdx].name));
         }
     }
@@ -687,6 +699,24 @@ bool processTurn(){
     for(auto& a:g_campaign.armies)
         if(a.owner==FACTION_PLAYER) applyMaint(a.units);
     applyMaint(g_campaign.reserve);
+    // PvP: mantenimiento de las tropas del cliente (descuenta de clientRes)
+    if(g_campaign.pvpMode){
+        Resources& cr=g_campaign.clientRes;
+        auto applyMaintC=[&](const std::vector<std::pair<int,int>>& us){
+            for(auto [ti,cnt]:us){
+                if(ti>=unitTypeCount()) continue;
+                const UnitTypeDef& td=g_unitTypes[ti];
+                if(td.soldierCount<=0) continue;
+                cr.gold-=td.maintGold*(cnt/(float)td.soldierCount);
+                cr.food-=td.maintFood*(cnt/(float)td.soldierCount);
+            }
+        };
+        for(auto& a:g_campaign.armies)
+            if(a.owner==g_campaign.clientFaction) applyMaintC(a.units);
+        applyMaintC(g_campaign.clientReserve);
+        cr.gold=std::max(0.f,cr.gold);
+        cr.food=std::max(0.f,cr.food);
+    }
 
     // Clamp resources (don't go negative)
     r.gold=std::max(0.f,r.gold);
@@ -878,8 +908,11 @@ int factionMilitaryPower(int f){
         if((int)p.owner==f) for(const auto& g:p.army) s+=g.second;
     for(const auto& a:g_campaign.armies)
         if((int)a.owner==f) s+=armySoldiers(a.units);
-    if(f==FACTION_PLAYER) // la reserva solo existe para el jugador
+    if(f==FACTION_PLAYER) // la reserva del host
         for(const auto& r:g_campaign.reserve) s+=r.second;
+    // PvP: la reserva del cliente cuenta para su facción
+    if(g_campaign.pvpMode&&(FactionId)f==g_campaign.clientFaction)
+        for(const auto& r:g_campaign.clientReserve) s+=r.second;
     return s;
 }
 

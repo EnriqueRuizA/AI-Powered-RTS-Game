@@ -114,6 +114,14 @@ bool serializeCampaignState(const CampaignState& st, std::vector<char>& out){
     bw1(out,pvp);
     bw1(out,cf);
     bw1(out,st.clientRes);
+    // PvP (v10): reserva por facción — clientReserve + faccion de la cola
+    // (al FINAL del stream para mantener compat de lectura con v9)
+    int nCR=(int)st.clientReserve.size();
+    bw1(out,nCR);
+    for(const auto& r:st.clientReserve){ bw1(out,r.first); bw1(out,r.second); }
+    int nqF=(int)st.recruitQueue.size();
+    bw1(out,nqF);
+    for(const auto& e:st.recruitQueue) bw1(out,e.faction);
     return true;
 }
 
@@ -133,8 +141,8 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
     if(!data||size<sizeof(int)) return false;
     BufReader b{data,size};
     int ver=b.r1<int>();
-    // PvP (v9): aceptar v8 (compat: defaults PvP) y v9 (campos PvP)
-    if(!b.ok||(ver!=SAVE_VERSION&&ver!=8)) return false;
+    // PvP: aceptar v8 (defaults PvP), v9 (campos PvP) y v10 (reserva por facción)
+    if(!b.ok||(ver!=SAVE_VERSION&&ver!=8&&ver!=9)) return false;
 
     st.campaignId=b.r1<int>();
     st.turn=b.r1<int>();
@@ -240,7 +248,7 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
     b.r(st.allied,sizeof(bool)*FACTION_COUNT);
     b.r(st.tradePact,sizeof(bool)*FACTION_COUNT);
     // PvP (v9): dos reinos separados (v8 = defaults: co-op)
-    if(ver==9){
+    if(ver==9||ver==10){
         unsigned char pvp=b.r1<unsigned char>();
         int cf=b.r1<int>();
         st.pvpMode=(pvp!=0);
@@ -250,6 +258,27 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
         st.pvpMode=false;
         st.clientFaction=FACTION_AGGRESSIVE;
         st.clientRes=Resources();
+    }
+    // PvP (v10): reserva por facción — clientReserve + faccion de la cola
+    // (v9 u older = defaults: reserva común, facciones de la cola = PLAYER)
+    if(ver==10){
+        int nCR=b.r1<int>();
+        if(!b.ok||nCR<0||nCR>512) return false;
+        for(int i=0;i<nCR;i++){
+            int ti=b.r1<int>(), cnt=b.r1<int>();
+            st.clientReserve.push_back({ti,cnt});
+            if(!b.ok) return false;
+        }
+        int nqF=b.r1<int>();
+        if(!b.ok||nqF<0||nqF>512) return false;
+        if(nqF!=(int)st.recruitQueue.size()) return false; // longitud debe casar
+        for(int i=0;i<nqF;i++){
+            st.recruitQueue[i].faction=b.r1<int>();
+            if(!b.ok) return false;
+        }
+    } else {
+        st.clientReserve.clear();
+        for(auto& e:st.recruitQueue) e.faction=FACTION_PLAYER;
     }
     return b.ok;
 }
