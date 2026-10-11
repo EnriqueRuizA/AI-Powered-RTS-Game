@@ -1261,3 +1261,46 @@ incidencias reales:
   `rts_game_mod.exe` inexistente): fuera de la suite.
 - La suite dura ~2,5 min; si se usa el equipo durante la ejecución pueden
   perderse checks sensibles al foco (interferencia, no regresión).
+
+### 12.6 Fase v11/v12 — campaña Europa, matriz de construcción, barcos y preparación (2026-10-11)
+
+- **5ª campaña Europa** (36 provincias, `MAX_CAMPAIGNS=5`): plantillas +
+  adyacencia + silueta en `mapart.cpp`; botón en el menú (los botones bajo
+  las campañas bajan un paso: QUICK BATTLE ahora en `step*6`).
+- **Matriz de construcción 4×4** (`City.grid[16]`, `count[]`,
+  `constructSlot`; murallas al perímetro) + edificios repetibles con bonus
+  acumulativos; **atalaya** (`BLD_WATCHTOWER`, visión a 2 regiones en
+  `updateFogOfWar`).
+- **D1 cerrado**: `explored` pasa a `std::vector<bool>` dimensionado al nº
+  real de provincias (Europa ya no queda en niebla permanente).
+- **Barcos**: `FieldArmy.isShip`, EMBARK (1 oro/unidad, costa),
+  DISEMBARK total + LAND HALF (desembarque parcial por mitad; barco vacío =
+  desaparece), `shipCanReach` (ruta marítima de 2 saltos).
+- **MERGE modal** para combinar ejércitos; **composición visible** al
+  seleccionar; **Escape/clic vacío** deselecciona (acotado al área del mapa
+  para no anular la selección al pulsar END TURN).
+- **Terrenos de batalla variados** (`terrain.cpp`: ríos con puente, lagos,
+  bosques, montañas, ciudades con muralla) + colores por terreno.
+- **Fase de preparación pre-batalla** (`prepPhase/prepTimer/prepFormation`,
+  `usePrepPhase`/`prepTimeSec` en Settings con persistencia): overlay con
+  4 formaciones + cuenta atrás + BEGIN BATTLE; input y simulación
+  bloqueados durante la preparación.
+- **D2 cerrado (veteranía real, `SAVE_VERSION=12`)**: `recruitTurnsFor`
+  (Barracks −1t/copia, mín. 1), `cityVeterancy` (Range+Stable, 0..3),
+  `FieldArmy.veterancy` asignado al formar/unir/fusionar y pasado a
+  `initBattle`; deserialize acepta v8–v12.
+- **D6 cerrado**: `bldHasPrereq`/`bldReqName` en `city.h/cpp` (la UI ya no
+  duplica el literal de prerequisitos). **D7 cerrado**: eliminado el campo
+  muerto `formationChoice`. **D8 cerrado**: la formación pre-batalla muta
+  `g_formPerRow/g_formSpacing` por batalla (los `g_settings` del usuario
+  quedan intactos).
+- **D3 mitigado**: desembarque parcial = LAND HALF (mitad por tipo);
+  selector arbitrario por tipo/cantidad diferido a la fase de jugabilidad.
+- **D4**: `build/test_battle.ps1` reparado (apuntaba a `rts_game_mod.exe`
+  inexistente; ahora a `rts_game.exe`). `test_ranged`/`test_vfx`
+  actualizados al menú de 5 campañas (`Click 800 572`) + clic en
+  BEGIN BATTLE (`Click 800 568`).
+- Warnings 12 → 10 (indentaciones engañosas en tooltip/save, `contentTop`
+  sin usar). `settings.example.ini` al día (4 claves de formación/prep).
+- Tests: suite verde (`test_faseJ/K/I/D`, `test_ranged`, `test_net`,
+  `test_h_sync`).

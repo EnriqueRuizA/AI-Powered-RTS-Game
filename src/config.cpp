@@ -36,6 +36,8 @@ void saveSettings(){
     fprintf(f,"language %d\n",g_settings.language);
     fprintf(f,"formationSpacing %.3f\n",g_settings.formationSpacing);
     fprintf(f,"formationPerRow %d\n",g_settings.formationPerRow);
+    fprintf(f,"prepTimeSec %d\n",g_settings.prepTimeSec);
+    fprintf(f,"usePrepPhase %d\n",(int)g_settings.usePrepPhase);
     fclose(f);
 }
 void loadSettings(){
@@ -54,6 +56,8 @@ void loadSettings(){
         else if(strcmp(key,"language")==0) fscanf(f,"%d",&g_settings.language);
         else if(strcmp(key,"formationSpacing")==0) fscanf(f,"%f",&g_settings.formationSpacing);
         else if(strcmp(key,"formationPerRow")==0) fscanf(f,"%d",&g_settings.formationPerRow);
+        else if(strcmp(key,"prepTimeSec")==0) fscanf(f,"%d",&g_settings.prepTimeSec);
+        else if(strcmp(key,"usePrepPhase")==0){ int v=1; fscanf(f,"%d",&v); g_settings.usePrepPhase=(bool)v; }
     }
     fclose(f);
     // Clamp UI scale to supported range
@@ -63,4 +67,6 @@ void loadSettings(){
     if(g_settings.formationSpacing>40.f) g_settings.formationSpacing=40.f;
     if(g_settings.formationPerRow<3) g_settings.formationPerRow=3;
     if(g_settings.formationPerRow>10) g_settings.formationPerRow=10;
+    if(g_settings.prepTimeSec<5) g_settings.prepTimeSec=5;
+    if(g_settings.prepTimeSec>60) g_settings.prepTimeSec=60;
 }

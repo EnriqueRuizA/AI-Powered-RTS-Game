@@ -48,8 +48,9 @@ procedurales originales (fallback automático).
 - Botón **SAVE** en la barra inferior del mapa de campaña, o tecla **F5**.
 - **MENU** (volver al menú principal) guarda automáticamente.
 - Auto-guardado al cerrar el juego si hay campaña activa (cualquier turno).
-- Archivos: `campaign_0.dat` … `campaign_3.dat` + `campaign_last.dat`
-  (campaña recordada para **CONTINUE**). Formato binario `SAVE_VERSION=10`.
+- Archivos: `campaign_0.dat` … `campaign_4.dat` + `campaign_last.dat`
+  (campaña recordada para **CONTINUE**). Formato binario `SAVE_VERSION=12`
+  (compatible hacia atrás: carga v8–v12).
 
 ## Estructura
 
@@ -126,6 +127,30 @@ powershell -ExecutionPolicy Bypass -File build\test_faseJ.ps1   # ejércitos de 
 powershell -ExecutionPolicy Bypass -File build\test_faseD.ps1   # auto-resolve
 powershell -ExecutionPolicy Bypass -File build\test_ranged.ps1  # unidades con alcance
 ```
+
+> **Nota**: tras añadir la 5ª campaña (Europa), el botón QUICK BATTLE del
+> menú bajó un paso: los tests de batalla usan las coordenadas actualizadas
+> (`Click 800 572`) y pulsan **BEGIN BATTLE** (`Click 800 568`) para saltar
+> la fase de preparación.
+
+## Novedades v11/v12 (campaña y batalla)
+
+- **5ª campaña: Europa** (36 provincias) en el menú principal.
+- **Matriz de construcción 4×4** por ciudad + edificios repetibles con
+  bonus acumulativos; murallas en el perímetro.
+- **Atalaya**: la ciudad que la tiene revela a 2 regiones de distancia.
+- **Barcos**: EMBARK (1 oro/unidad, solo en costa), DISEMBARK total o
+  parcial (LAND HALF), rutas marítimas de 2 saltos entre costas.
+- **MERGE**: ventana modal para combinar ejércitos de la provincia.
+- **Composición del ejército** visible al seleccionar; **Escape/clic vacío**
+  deselecciona (los clics en barras no deseleccionan).
+- **Terrenos de batalla variados**: ríos con puente, lagos, bosques,
+  montañas y ciudades con muralla según la provincia.
+- **Fase de preparación pre-batalla** (defecto 15 s, configurable en
+  Settings: `usePrepPhase`/`prepTimeSec`): elegir formación
+  (LINE/COLUMN/SQUARE/LOOSE) con movimiento bloqueado.
+- **Veteranía real (D2)**: Barracks acelera reclutamiento; Range/Stable dan
+  veteranía inicial (guardada en `SAVE_VERSION=12`).
 
 ## Créditos de arte
 

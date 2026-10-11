@@ -102,6 +102,57 @@ static std::vector<Vector2>                  g_cellSeed; // centros cacheados (d
 
 // Silueta normalizada del continente (y-down, sentido horario visual)
 static std::vector<Vector2> contOutline(int campaignId){
+    // Europa (campaña 4): silueta realista — Ibérica, Francia, Escandinavia,
+    // Italia (bota), Balcanes, Europa del Este. Reconocible a simple vista.
+    if(campaignId==4){
+        static const float europe[][2]={
+            // Portugal/Andalucía (suroeste)
+            {0.040f,0.760f},{0.050f,0.640f},{0.100f,0.580f},
+            // Golfo de Vizcaya / Bretaña
+            {0.170f,0.545f},{0.195f,0.485f},{0.235f,0.455f},
+            // Canal de la Mancha / Países Bajos
+            {0.290f,0.395f},{0.330f,0.355f},
+            // Dinamarca / Noruega
+            {0.375f,0.295f},{0.395f,0.215f},{0.405f,0.135f},
+            // Noruega norte / Escandinavia
+            {0.475f,0.075f},{0.560f,0.095f},{0.640f,0.115f},
+            // Finlandia / Rusia norte
+            {0.720f,0.130f},{0.840f,0.165f},{0.930f,0.245f},
+            // Rusia este / Ucrania
+            {0.910f,0.375f},{0.800f,0.430f},{0.730f,0.470f},
+            // Mar Negro / Turquía
+            {0.710f,0.560f},{0.680f,0.660f},
+            // Grecia (sur)
+            {0.615f,0.800f},{0.565f,0.775f},
+            // Adriático este / Italia este
+            {0.530f,0.640f},{0.470f,0.590f},
+            // Bota italiana (sur)
+            {0.445f,0.830f},{0.405f,0.795f},{0.395f,0.700f},
+            // Italia oeste / Francia mediterránea
+            {0.345f,0.615f},{0.305f,0.645f},
+            // España este / sur
+            {0.230f,0.710f},{0.160f,0.760f},{0.090f,0.790f}
+        };
+        const int NB=(int)(sizeof(europe)/sizeof(europe[0]));
+        float cx=(float)SCREEN_W*0.45f, cy=(float)SCREEN_H*0.45f;
+        std::mt19937 rng(0x4555524Fu); // "EURO"
+        std::uniform_real_distribution<float> jn(-1.f,1.f);
+        std::vector<Vector2> pts;
+        pts.reserve(NB*2);
+        for(int i=0;i<NB;i++){
+            int j=(i+1)%NB;
+            Vector2 a={europe[i][0]*(float)SCREEN_W, europe[i][1]*(float)SCREEN_H};
+            Vector2 b={europe[j][0]*(float)SCREEN_W, europe[j][1]*(float)SCREEN_H};
+            pts.push_back(a);
+            Vector2 m={(a.x+b.x)*0.5f,(a.y+b.y)*0.5f};
+            float nx=m.x-cx, ny=m.y-cy;
+            float nl=sqrtf(nx*nx+ny*ny); if(nl<1.f) nl=1.f;
+            float off=5.f+jn(rng)*16.f; // costa irregular pero contenida
+            m.x+=nx/nl*off; m.y+=ny/nl*off;
+            pts.push_back(m);
+        }
+        return pts;
+    }
     static const float base[][2]={
         {0.030f,0.300f},{0.100f,0.140f},{0.240f,0.080f},{0.420f,0.120f},
         {0.560f,0.060f},{0.720f,0.140f},{0.860f,0.100f},{0.950f,0.260f},
@@ -293,7 +344,7 @@ void drawCampaignContinent(int campaignId){
 
     // 1) Rellenos de celda
     for(size_t i=0;i<prov.size() && i<g_cell.size();i++){
-        bool explored=(i<32 && g_campaign.explored[i]);
+        bool explored=(i<g_campaign.explored.size() && g_campaign.explored[i]);
         Color fill;
         if(!explored) fill=fogFill;
         else{
@@ -313,7 +364,7 @@ void drawCampaignContinent(int campaignId){
 
     // 2) Bordes: costa (sand) y fronteras entre provincias (oscuro)
     for(size_t i=0;i<prov.size() && i<g_cell.size();i++){
-        bool explored=(i<32 && g_campaign.explored[i]);
+        bool explored=(i<g_campaign.explored.size() && g_campaign.explored[i]);
         const auto& poly=g_cell[i];
         int n=(int)poly.size();
         for(int k=0;k<n;k++){

@@ -137,7 +137,9 @@ static void netHostApplyCmd(const NetCmd& c){
         Resources& r=(cf==FACTION_PLAYER)?g_campaign.res:g_campaign.clientRes;
         if(r.gold<td.recruitGold||r.food<td.recruitFood||r.iron<td.recruitIron) break;
         r.gold-=td.recruitGold; r.food-=td.recruitFood; r.iron-=td.recruitIron;
-        g_campaign.recruitQueue.push_back({ti,td.recruitTurns,td.recruitTurns,cf}); // PvP: facción del remitente
+        // D2: bonus real de Barracks (-1t por copia) en la ciudad que recluta
+        int rt=recruitTurnsFor(prov,td.recruitTurns);
+        g_campaign.recruitQueue.push_back({ti,rt,rt,cf}); // PvP: facción del remitente
         g_netDirty=true;
         break;
     }
@@ -350,9 +352,9 @@ GameState updateDrawBattle(Vector2 mouse,float dt){
     }
 
     if(!g_battle.battleOver){
-        // Selection
+        // Selection (v11: bloqueado durante la fase de preparación — el overlay captura el ratón)
         bool overHud=(mouse.y>SCREEN_H-HUD_H||mouse.y<TOPBAR_H);
-        if(!overHud){
+        if(!overHud && !g_battle.prepPhase){
             // Convert mouse to world coords
             Vector2 worldMouse=screenToWorldBattle(mouse);
 
@@ -387,7 +389,8 @@ GameState updateDrawBattle(Vector2 mouse,float dt){
                 if(gotSel) playSfx(SFX_SELECT,0.9f);
                 g_battle.selRect={};
             }
-            if(IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)){
+            // v11: durante la preparación no se admiten órdenes (solo selección)
+            if(IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)&&!g_battle.prepPhase){
                 // Check for enemy target
                 int eIdx=-1; float bestD=9999;
                 for(int i=0;i<(int)g_battle.enemyUnits.size();i++){
@@ -505,6 +508,15 @@ GameState updateDrawBattle(Vector2 mouse,float dt){
 
         // Update
         profAdd(PROF_INPUT,(GetTime()-t0)*1000.0); t1=GetTime();
+        if(g_battle.prepPhase){
+            // v11: fase de preparación — movimiento bloqueado, solo cuenta atrás
+            g_battle.prepTimer-=GetFrameTime();
+            if(g_battle.prepTimer<=0.f){
+                g_battle.prepPhase=false;
+                battleLogAdd("Preparation complete — battle begins!");
+            }
+            // No se actualizan unidades/IA mientras se prepara
+        } else {
         updateEnemyAI(eff);
         updateBattleUnits(g_battle.playerUnits,g_battle.enemyUnits,eff);
         updateBattleUnits(g_battle.enemyUnits,g_battle.playerUnits,eff);
@@ -514,6 +526,7 @@ GameState updateDrawBattle(Vector2 mouse,float dt){
         fxUpdate(eff);
         fxBattleDust(eff);
         atmosUpdate(eff);
+        } // end if(!prepPhase) — fin de actualización de unidades
 
         // Update projectiles
         for(auto& p:g_battle.projs){
@@ -949,7 +962,21 @@ GameState updateDrawPreBattle(Vector2 mouse){
                  (pi>=0&&pi<(int)g_campaign.provinces.size())?g_campaign.provinces[pi].name:"Unknown");
         TerrainType ter=(pi>=0&&pi<(int)g_campaign.provinces.size())?
                          g_campaign.provinces[pi].terrain:TERRAIN_PLAIN;
-        initBattle(playerGroups,enemyGroups,ter,pi,g_preBattle.isDefense,sname);
+        // D2: veteranías — el ejército del jugador aporta la suya (Range/Stable
+        // al formarlo); la guarnición defensora en ciudad hereda la de la ciudad
+        int pv=0, ev=0;
+        if(g_preBattle.armyIdx>=0&&g_preBattle.armyIdx<(int)g_campaign.armies.size())
+            pv=g_campaign.armies[g_preBattle.armyIdx].veterancy;
+        if(g_preBattle.isDefense){
+            if(piOk&&g_campaign.provinces[pi].owner==g_localFaction)
+                pv=std::max(pv,cityVeterancy(pi));
+            if(g_preBattle.attackerArmyIdx>=0&&
+               g_preBattle.attackerArmyIdx<(int)g_campaign.armies.size())
+                ev=g_campaign.armies[g_preBattle.attackerArmyIdx].veterancy;
+        } else {
+            ev=cityVeterancy(pi); // guarnición defendiendo en su ciudad
+        }
+        initBattle(playerGroups,enemyGroups,ter,pi,g_preBattle.isDefense,sname,pv,ev);
         return STATE_BATTLE;
     }
     if(drawButton({(float)(SCREEN_W-200),(float)(bY+6),186,46},"RETREAT",mouse,{55,20,20,255},{90,35,35,255})){
@@ -998,6 +1025,22 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
     if(IsKeyPressed(KEY_F5)){
         if(saveGame()) printf("[SAVE] Game saved to %s\n",getCampaignSavePath(g_campaign.campaignId));
         else printf("[SAVE] ERROR: could not write %s\n",getCampaignSavePath(g_campaign.campaignId));
+    }
+
+    // v11: estado de modales (accesible en toda la función)
+    static bool g_mergeOpen=false;
+    static int  g_mergeA=-1, g_mergeB=-1;
+    static int  g_mergeProv=-1;
+    // D3: modal de desembarco (elegir qué tropas bajan del barco)
+    static bool g_disembarkOpen=false;
+    static int  g_disembarkArmy=-1;
+
+    // v11: Escape deselecciona el ejército activo
+    if(IsKeyPressed(KEY_ESCAPE)&&g_campaign.selectedArmy>=0
+       &&!g_mergeOpen&&!g_disembarkOpen){
+        g_campaign.selectedArmy=-1;
+        g_campaign.readyUnits.clear();
+        g_selectedProvince=-1;
     }
 
     // Army movement animation: advance and complete when done
@@ -1052,36 +1095,21 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
         DrawRectangle((int)fx,0,110,SCREEN_H,{140,170,195,(unsigned char)(4+i*2)});
     }
 
+    // v11: niebla de guerra con atalaya (2 saltos) — ANTES de dibujar el
+    // continente: D1 redimensiona g_campaign.explored al nº de provincias y
+    // drawCampaignContinent lee ese vector
+    updateFogOfWar();
+
     // Fase C: continente tipo Risk — celdas Voronoi + fronteras + costa
     drawCampaignContinent(g_campaign.campaignId);
 
-    // Roads (adjacencies) — thicker, earth tone
-    for(int i=0;i<(int)g_campaign.provinces.size();i++){
-        auto& p=g_campaign.provinces[i];
-        for(int adj:p.adjacent){
-            if(adj>i){
-                Vector2 mid = {(p.center.x+g_campaign.provinces[adj].center.x)*0.5f,
-                              (p.center.y+g_campaign.provinces[adj].center.y)*0.5f};
-                DrawLineEx(p.center,mid,3.5f,{70,55,35,180});
-                DrawLineEx(mid,g_campaign.provinces[adj].center,3.5f,{70,55,35,180});
-            }
-        }
-    }
-
-    // Update explored provinces (6.3)
-    for(int i=0;i<(int)g_campaign.provinces.size()&&i<32;i++){
-        if(g_campaign.provinces[i].owner==FACTION_PLAYER) g_campaign.explored[i]=true;
-        // Adjacent to player province are also explored
-        for(int adj:g_campaign.provinces[g_campaign.playerProvince].adjacent){
-            if(adj<32) g_campaign.explored[adj]=true;
-        }
-        if((int)g_campaign.playerProvince<32) g_campaign.explored[g_campaign.playerProvince]=true;
-    }
+    // v11: se eliminaron las "roads" (líneas esquemáticas entre provincias);
+    // el hover resalta las adyacencias y basta.
 
     // Fase C: decor + mini-ciudad + labels sobre las celdas del continente
     for(int i=0;i<(int)g_campaign.provinces.size();i++){
         auto& p=g_campaign.provinces[i];
-        bool explored=(i<32&&g_campaign.explored[i]);
+        bool explored=(i<(int)g_campaign.explored.size()&&g_campaign.explored[i]);
         Color oc=factionDisplayColor(p.owner); // Fase D+: aliados => color del jugador
         if(!explored) oc={40,40,40,255};
         float rad=38.f; // radio de decor/labels (la celda la dibuja el continente)
@@ -1134,7 +1162,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
         for(int i=0;i<(int)g_campaign.provinces.size();i++){
             std::vector<int> list=armiesAtProv(i);
             if(list.empty()) continue;
-            bool explored=(i<32&&g_campaign.explored[i]);
+            bool explored=(i<(int)g_campaign.explored.size()&&g_campaign.explored[i]);
             for(int k=0;k<(int)list.size();k++){
                 int idx=list[k];
                 FieldArmy& a=g_campaign.armies[idx];
@@ -1178,7 +1206,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
             DrawCircleV({rx,ry},4,{220,220,180,240});
         }
     }
-    if(!armyMoving) drawCampaignMovementArrows();
+    // v11: flechas de movimiento eliminadas (hover resalta adyacencias).
 
     // Hover tooltip (scale-aware line spacing to avoid overlap)
     // Guard: fuera de las barras superior/inferior (la celda puede alcanzarlas;
@@ -1187,7 +1215,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
     for(int i=0;i<(int)g_campaign.provinces.size();i++){
         auto& p=g_campaign.provinces[i];
         float rad=38.f; // Fase C: offset de tooltip
-        bool explored=(i<32&&g_campaign.explored[i]);
+        bool explored=(i<(int)g_campaign.explored.size()&&g_campaign.explored[i]);
         Color oc=diplomacyMapColor(p.owner); // Fase I: modo alianzas cambia solo el color
         if(!explored) oc={40,40,40,255};
         bool hov=(mouse.y>hoverTop && mouse.y<hoverBot && pointInProvinceCell(i,mouse));
@@ -1219,8 +1247,10 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
             DrawText(p.name,(int)tx,(int)ty,14,C_GOLD); ty+=lineH1;
             DrawText(TextFormat("Terrain: %s",terrainNames[(int)p.terrain]),(int)tx,(int)ty,12,C_SECONDARY); ty+=lineH2;
             DrawText(TextFormat("Owner: %s",factionNames[(int)p.owner]),(int)tx,(int)ty,12,oc); ty+=lineH2;
-            if(p.hasCity) DrawText(TextFormat("City: %s",p.city.name),(int)tx,(int)ty,12,C_PARCHMENT); ty+=lineH2;
-            if(tot>0) DrawText(TextFormat("Army: ~%d soldiers",tot),(int)tx,(int)ty,12,C_ENEMY_COL); ty+=lineH2;
+            if(p.hasCity) DrawText(TextFormat("City: %s",p.city.name),(int)tx,(int)ty,12,C_PARCHMENT);
+            ty+=lineH2;
+            if(tot>0) DrawText(TextFormat("Army: ~%d soldiers",tot),(int)tx,(int)ty,12,C_ENEMY_COL);
+            ty+=lineH2;
             // Fase D: predicted victory if the player attacks this province
             if(showOdds){
                 std::vector<std::pair<int,int>> tipP;
@@ -1255,6 +1285,12 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                 for(int adj:g_campaign.provinces[g_campaign.playerProvince].adjacent)
                     if(adj==i) isAdj=true;
                 bool isPlayer=(i==g_campaign.playerProvince);
+                // v11: los barcos navegan rutas costeras (2 saltos por el mar)
+                bool shipSail=false;
+                if(!isAdj&&selArmy>=0&&selArmy<(int)g_campaign.armies.size()
+                   &&g_campaign.armies[selArmy].isShip)
+                    shipSail=shipCanReach(g_campaign.playerProvince,i);
+                isAdj=isAdj||shipSail;
 
                 if(isPlayer&&p.hasCity){
                     g_campaign.viewedCity=i;
@@ -1349,10 +1385,32 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
             if(i==g_campaign.selectedArmy) ord=ptot;
         }
         char abuf[80];
-        snprintf(abuf,79,"Army %d/%d: %d soldiers%s",ord,ptot,armySoldiers(sa.units),
-                 sa.moved?" - moved":"");
+        snprintf(abuf,79,"Army %d/%d: %d soldiers%s%s",ord,ptot,armySoldiers(sa.units),
+                 sa.isShip?" [SHIP]":"", sa.moved?" - moved":"");
         int abw=MeasureText(abuf,13);
         DrawText(abuf,SCREEN_W-abw-12,(int)topBarY+1,13,sa.moved?C_SECONDARY:C_GOLD);
+        // v11: composición visual del ejército — cuadrícula de tipos bajo la barra
+        float compX=SCREEN_W-uiPx(10.f);
+        float compY=topBarH+uiPx(4.f);
+        float cellSize=uiPx(20.f), cellGap=uiPx(3.f);
+        // Calcular ancho total para alinear a la derecha
+        int nGroups=(int)sa.units.size();
+        float totalW=(float)nGroups*(cellSize+cellGap)-cellGap;
+        float sx=compX-totalW;
+        if(sx<uiPx(4.f)) sx=uiPx(4.f);
+        float cx=sx;
+        for(auto [ti,cnt]:sa.units){
+            if(ti>=unitTypeCount()) continue;
+            const UnitTypeDef& td=g_unitTypes[ti];
+            DrawRectangle((int)cx,(int)compY,(int)cellSize,(int)cellSize,
+                          {(unsigned char)td.r,(unsigned char)td.g,(unsigned char)td.b,235});
+            DrawRectangleLinesEx({cx,compY,cellSize,cellSize},1,{0,0,0,180});
+            // Conteo debajo del cuadrado
+            char cbuf[8];
+            snprintf(cbuf,7,"%d",cnt);
+            DrawText(cbuf,(int)cx,(int)(compY+cellSize+uiPx(1.f)),9,C_PARCHMENT);
+            cx+=cellSize+cellGap;
+        }
     }
 
     // Bottom buttons
@@ -1409,6 +1467,64 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                 netMarkDirty();
             }
         }
+        bx+=bw+uiPx(10.f);
+        // v11: MERGE — ventana modal para combinar ejércitos de la provincia
+        bool canMerge=false;
+        if(haveSel){
+            int prov=g_campaign.armies[g_campaign.selectedArmy].province;
+            int others=0;
+            for(int i=0;i<(int)g_campaign.armies.size();i++)
+                if(i!=g_campaign.selectedArmy&&g_campaign.armies[i].province==prov
+                   &&g_campaign.armies[i].owner==g_localFaction) others++;
+            canMerge=(others>0);
+        }
+        if(drawSmBtn({bx,btnY,bw,bh},"MERGE",mouse,
+                     canMerge?Color{45,35,15,255}:Color{25,25,25,255},
+                     canMerge?Color{90,70,30,255}:Color{25,25,25,255})&&canMerge){
+            int prov=g_campaign.armies[g_campaign.selectedArmy].province;
+            g_mergeA=g_campaign.selectedArmy;
+            g_mergeB=-1;
+            for(int i=0;i<(int)g_campaign.armies.size();i++)
+                if(i!=g_mergeA&&g_campaign.armies[i].province==prov
+                   &&g_campaign.armies[i].owner==g_localFaction){ g_mergeB=i; break; }
+            if(g_mergeB>=0){ g_mergeOpen=true; g_mergeProv=prov; }
+        }
+        bx+=bw+uiPx(10.f);
+        // v11: EMBARK — embarcar ejército en un barco (1 oro por unidad)
+        bool canEmbark=false;
+        if(haveSel&&!g_campaign.armies[g_campaign.selectedArmy].isShip){
+            int prov=g_campaign.armies[g_campaign.selectedArmy].province;
+            if(prov>=0&&prov<(int)g_campaign.provinces.size()
+               &&g_campaign.provinces[prov].terrain==TERRAIN_COAST)
+                canEmbark=true;
+        }
+        bool onShip=haveSel&&g_campaign.armies[g_campaign.selectedArmy].isShip;
+        const char* shipLbl=onShip?"DISEMBARK":"EMBARK";
+        bool shipReady=onShip||canEmbark;
+        if(drawSmBtn({bx,btnY,bw,bh},shipLbl,mouse,
+                     shipReady?Color{20,40,55,255}:Color{25,25,25,255},
+                     shipReady?Color{40,80,110,255}:Color{25,25,25,255})&&shipReady&&netCanEdit()){
+            int ai=g_campaign.selectedArmy;
+            FieldArmy& fa=g_campaign.armies[ai];
+            if(fa.isShip){
+                // D3: abrir modal para elegir qué tropas desembarcan
+                g_disembarkOpen=true;
+                g_disembarkArmy=ai;
+            } else {
+                // Embarcar: 1 oro por unidad
+                int cost=armySoldiers(fa.units);
+                Resources& r=(g_campaign.pvpMode&&g_netSession.role==NET_ROLE_CLIENT)
+                             ?g_campaign.clientRes:g_campaign.res;
+                if(r.gold>=(float)cost){
+                    r.gold-=(float)cost;
+                    fa.isShip=true;
+                    fa.moved=false; // el barco tiene su propio turno de movimiento
+                    battleLogAdd(TextFormat("Embarked %d soldiers (cost %d gold)",cost,cost));
+                    netMarkDirty();
+                }
+            }
+        }
+        // D3: LAND HALF ahora vive en el modal de desembarco (g_disembarkOpen)
     }
     // SAVE + MENU (guardar antes de salir al menú principal)
     {
@@ -1421,6 +1537,253 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                       {50,20,20,255},{90,38,38,255})){
             saveGame(); // guardar al volver al menú principal
             return STATE_MAIN_MENU;
+        }
+    }
+
+    // v11: clic en espacio vacío del MAPA (entre barras, fuera de toda
+    // provincia) → deseleccionar. Los clics sobre la barra superior/inferior
+    // o modales NO deseleccionan (si no, pulsar END TURN anularía la selección).
+    if(!armyMoving && !g_mergeOpen && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)){
+        float hTop=uiPx(46.f), hBot=(float)SCREEN_H-uiPx(52.f);
+        if(mouse.y>hTop && mouse.y<hBot){
+            bool onCell=false;
+            for(int i=0;i<(int)g_campaign.provinces.size();i++){
+                if(pointInProvinceCell(i,mouse)){ onCell=true; break; }
+            }
+            if(!onCell && g_campaign.selectedArmy>=0){
+                g_campaign.selectedArmy=-1;
+                g_campaign.readyUnits.clear();
+                g_selectedProvince=-1;
+            }
+        }
+    }
+
+    // ═══ v11: MODAL DE MERGE — composición de ejércitos ═══
+    if(g_mergeOpen){
+        // Guard: si los índices dejaron de ser válidos, cerrar
+        if(g_mergeA<0||g_mergeA>=(int)g_campaign.armies.size()||
+           g_mergeB<0||g_mergeB>=(int)g_campaign.armies.size()||
+           g_campaign.armies[g_mergeA].owner!=g_localFaction||
+           g_campaign.armies[g_mergeB].owner!=g_localFaction||
+           g_campaign.armies[g_mergeA].province!=g_campaign.armies[g_mergeB].province){
+            g_mergeOpen=false;
+        } else {
+            // Overlay oscuro
+            DrawRectangle(0,0,SCREEN_W,SCREEN_H,{0,0,0,170});
+            FieldArmy& A=g_campaign.armies[g_mergeA];
+            FieldArmy& B=g_campaign.armies[g_mergeB];
+            float mW=uiPx(760.f), mH=uiPx(440.f);
+            float mX=(SCREEN_W-mW)*0.5f, mY=(SCREEN_H-mH)*0.5f;
+            DrawRectangle((int)mX,(int)mY,(int)mW,(int)mH,{18,16,12,245});
+            DrawRectangleLinesEx({mX,mY,mW,mH},2,C_GOLD);
+            DrawText(TextFormat("MERGE ARMIES — %s",
+                     (g_mergeProv>=0&&g_mergeProv<(int)g_campaign.provinces.size())
+                     ?g_campaign.provinces[g_mergeProv].name:""),
+                     (int)(mX+14),(int)(mY+10),18,C_GOLD);
+            DrawText("Click a unit type to move it to the other army",
+                     (int)(mX+14),(int)(mY+36),11,C_SECONDARY);
+
+            // Dos paneles
+            float panelW=(mW-40.f)*0.5f;
+            float panelH=mH-110.f;
+            auto drawPanel=[&](FieldArmy& arm,float px,bool isLeft){
+                DrawRectangle((int)px,(int)(mY+56),(int)panelW,(int)panelH,{12,14,20,230});
+                DrawRectangleLinesEx({px,mY+56,panelW,panelH},1,{60,70,90,255});
+                DrawText(TextFormat("Army (%d soldiers)",armySoldiers(arm.units)),
+                         (int)(px+8),(int)(mY+62),12,C_PARCHMENT);
+                float iy=mY+84.f;
+                for(int u=0;u<(int)arm.units.size();u++){
+                    auto [ti,cnt]=arm.units[u];
+                    if(ti>=unitTypeCount()) continue;
+                    const UnitTypeDef& td=g_unitTypes[ti];
+                    Rectangle rowR={px+6.f,iy,panelW-12.f,26.f};
+                    bool hovRow=ptInRect(mouse,rowR);
+                    DrawRectangleRec(rowR,hovRow?Color{30,38,52,255}:Color{18,22,30,230});
+                    DrawRectangleLinesEx(rowR,1,hovRow?C_GOLD:Color{45,55,70,220});
+                    DrawRectangle((int)(rowR.x+4),(int)(rowR.y+5),16,16,
+                                  {(unsigned char)td.r,(unsigned char)td.g,(unsigned char)td.b,255});
+                    DrawText(td.name,(int)(rowR.x+26),(int)(rowR.y+6),11,C_PARCHMENT);
+                    DrawText(TextFormat("x%d",cnt),(int)(rowR.x+panelW-60),(int)(rowR.y+6),11,C_GOLD);
+                    // Clic: mover este grupo completo al otro ejército
+                    if(hovRow&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)&&netCanEdit()){
+                        FieldArmy& dst=isLeft?B:A;
+                        bool found=false;
+                        for(auto& d:dst.units) if(d.first==ti){ d.second+=cnt; found=true; break; }
+                        if(!found) dst.units.push_back({ti,cnt});
+                        // D2: mover grupo → veteranía máx entre ambos ejércitos
+                        dst.veterancy=std::max(dst.veterancy,arm.veterancy);
+                        arm.units.erase(arm.units.begin()+u);
+                        // Reasignar índices si A quedó vacío (no debería: héroe siempre)
+                        netMarkDirty();
+                        break;
+                    }
+                    iy+=29.f;
+                    if(iy>mY+56.f+panelH-10.f) break;
+                }
+                if(arm.units.empty())
+                    DrawText("(empty)",(int)(px+panelW/2-24),(int)(mY+panelH/2),12,C_SECONDARY);
+            };
+            drawPanel(A,mX+14.f,true);
+            // Flecha central
+            float arrowX=mX+20.f+panelW;
+            float arrowY=mY+56.f+panelH*0.5f;
+            DrawText(">>",(int)(arrowX+panelW*0.5f-14),(int)(arrowY-8),20,C_GOLD);
+            drawPanel(B,arrowX+20.f,false);
+
+            // Botones: MERGE ALL + CLOSE
+            float btnY2=mY+mH-54.f;
+            if(drawSmBtn({mX+14.f,btnY2,uiPx(160.f),uiPx(36.f)},"MERGE INTO A",mouse,
+                         Color{45,35,15,255},Color{90,70,30,255})){
+                // Mover todo de B a A
+                for(auto& u:B.units){
+                    bool found=false;
+                    for(auto& d:A.units) if(d.first==u.first){ d.second+=u.second; found=true; break; }
+                    if(!found) A.units.push_back(u);
+                }
+                // D2: veteranía máxima al fusionar
+                A.veterancy=std::max(A.veterancy,B.veterancy);
+                B.units.clear();
+                // Eliminar B (índice mayor)
+                int deadIdx=g_mergeB;
+                g_campaign.armies.erase(g_campaign.armies.begin()+deadIdx);
+                if(g_campaign.selectedArmy>=deadIdx) g_campaign.selectedArmy--;
+                selectArmy(g_campaign.selectedArmy);
+                netMarkDirty();
+                g_mergeOpen=false;
+            }
+            if(drawSmBtn({mX+mW-uiPx(160.f)-14.f,btnY2,uiPx(140.f),uiPx(36.f)},"CLOSE",mouse,
+                         {50,25,25,255},{80,40,40,255})){
+                g_mergeOpen=false;
+            }
+            // ESC cierra
+            if(IsKeyPressed(KEY_ESCAPE)) g_mergeOpen=false;
+            // Consumir el clic para que no atraviese al mapa
+            if(IsMouseButtonPressed(MOUSE_LEFT_BUTTON)&&
+               ptInRect(mouse,{mX,mY,mW,mH})){
+                return STATE_CAMPAIGN_MAP;
+            }
+        }
+    }
+
+    // ═══ D3: MODAL DE DESEMBARQUE — elegir qué tropas bajan del barco ═══
+    if(g_disembarkOpen){
+        int ai=g_disembarkArmy;
+        // Guard: el barco debe seguir válido y ser del jugador
+        if(ai<0||ai>=(int)g_campaign.armies.size()||
+           !g_campaign.armies[ai].isShip||
+           g_campaign.armies[ai].owner!=g_localFaction){
+            g_disembarkOpen=false;
+        } else {
+            const int shipProv=g_campaign.armies[ai].province;
+            // Desembarcar take (pares tipo->cantidad) y crear ejército en tierra
+            auto landFromShip=[&](std::vector<std::pair<int,int>> take){
+                // Quitar del barco
+                for(auto& t:take)
+                    for(auto& u:g_campaign.armies[ai].units)
+                        if(u.first==t.first){ u.second-=t.second; break; }
+                g_campaign.armies[ai].units.erase(
+                    std::remove_if(g_campaign.armies[ai].units.begin(),
+                                   g_campaign.armies[ai].units.end(),
+                                   [](const std::pair<int,int>&u){ return u.second<=0; }),
+                    g_campaign.armies[ai].units.end());
+                bool shipEmpty=g_campaign.armies[ai].units.empty();
+                int shipVet=g_campaign.armies[ai].veterancy;
+                FieldArmy land;
+                land.id=g_campaign.nextArmyId++;
+                land.owner=g_campaign.armies[ai].owner;
+                land.province=shipProv;
+                land.moved=true;      // ya se usó el barco este turno
+                land.isShip=false;
+                land.veterancy=shipVet; // D2: la veteranía viaja con las tropas
+                land.units=take;
+                // Vaciar el barco ANTES de push_back (evita realocar con ref vivas)
+                if(shipEmpty) g_campaign.armies.erase(g_campaign.armies.begin()+ai);
+                g_campaign.armies.push_back(land);
+                int landIdx=(int)g_campaign.armies.size()-1;
+                if(shipEmpty&&landIdx>ai) landIdx--;
+                battleLogAdd(TextFormat("Landed %d soldiers at %s",
+                    armySoldiers(take),
+                    shipProv>=0?g_campaign.provinces[shipProv].name:"sea"));
+                netMarkDirty();
+                if(shipEmpty){
+                    g_disembarkOpen=false;
+                    g_disembarkArmy=-1;
+                    selectArmy(landIdx);
+                    battleLogAdd("Ship emptied and scuttled");
+                } else {
+                    selectArmy(ai);
+                }
+            };
+
+            // Overlay oscuro
+            DrawRectangle(0,0,SCREEN_W,SCREEN_H,{0,0,0,170});
+            float mW=uiPx(560.f), mH=uiPx(430.f);
+            float mX=(SCREEN_W-mW)*0.5f, mY=(SCREEN_H-mH)*0.5f;
+            DrawRectangle((int)mX,(int)mY,(int)mW,(int)mH,{18,16,12,245});
+            DrawRectangleLinesEx({mX,mY,mW,mH},2,C_GOLD);
+            DrawText(TextFormat("DISEMBARK — %s",
+                     shipProv>=0?g_campaign.provinces[shipProv].name:"sea"),
+                     (int)(mX+14),(int)(mY+10),18,C_GOLD);
+            DrawText("Click a unit type to land all of it",
+                     (int)(mX+14),(int)(mY+36),11,C_SECONDARY);
+
+            // Lista de unidades a bordo
+            float iy=mY+58.f;
+            float rowW=mW-28.f;
+            for(int u=0;u<(int)g_campaign.armies[ai].units.size();u++){
+                auto [ti,cnt]=g_campaign.armies[ai].units[u];
+                if(ti>=unitTypeCount()) continue;
+                const UnitTypeDef& td=g_unitTypes[ti];
+                Rectangle rowR={mX+14.f,iy,rowW,30.f};
+                bool hovRow=ptInRect(mouse,rowR);
+                DrawRectangleRec(rowR,hovRow?Color{30,38,52,255}:Color{18,22,30,230});
+                DrawRectangleLinesEx(rowR,1,hovRow?C_GOLD:Color{45,55,70,220});
+                DrawRectangle((int)(rowR.x+6),(int)(rowR.y+7),16,16,
+                              {(unsigned char)td.r,(unsigned char)td.g,(unsigned char)td.b,255});
+                DrawText(td.name,(int)(rowR.x+30),(int)(rowR.y+8),12,C_PARCHMENT);
+                DrawText(TextFormat("x%d",cnt),
+                         (int)(rowR.x+rowW-70),(int)(rowR.y+8),12,C_GOLD);
+                DrawText("LAND >>",(int)(rowR.x+rowW-46),(int)(rowR.y+8),10,C_SECONDARY);
+                if(hovRow&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)&&netCanEdit()){
+                    landFromShip({{ti,cnt}});
+                    break;
+                }
+                iy+=33.f;
+            }
+            // Tras landFromShip el barco pudo desaparecer (g_disembarkOpen=false)
+            if(g_disembarkOpen&&g_campaign.armies[ai].units.empty())
+                DrawText("(empty)",(int)(mX+mW/2-24),(int)(mY+mH/2),12,C_SECONDARY);
+
+            // Botones: LAND ALL + LAND HALF + CLOSE
+            float btnY2=mY+mH-54.f;
+            if(g_disembarkOpen&&drawSmBtn({mX+14.f,btnY2,uiPx(130.f),uiPx(36.f)},"LAND ALL",mouse,
+                         Color{45,35,15,255},Color{90,70,30,255})){
+                if(netCanEdit()&&g_disembarkOpen)
+                    landFromShip(g_campaign.armies[ai].units);
+            }
+            if(g_disembarkOpen&&drawSmBtn({mX+14.f+uiPx(140.f),btnY2,uiPx(130.f),uiPx(36.f)},"LAND HALF",mouse,
+                         Color{20,50,45,255},Color{40,100,85,255})){
+                if(netCanEdit()&&g_disembarkOpen){
+                    std::vector<std::pair<int,int>> half;
+                    for(auto& u:g_campaign.armies[ai].units){
+                        if(u.second<=0) continue;
+                        half.push_back({u.first,(u.second+1)/2}); // mitad, redondeo arriba
+                    }
+                    landFromShip(half);
+                }
+            }
+            if(drawSmBtn({mX+mW-uiPx(140.f)-14.f,btnY2,uiPx(140.f),uiPx(36.f)},"CLOSE",mouse,
+                         {50,25,25,255},{80,40,40,255})){
+                g_disembarkOpen=false;
+                g_disembarkArmy=-1;
+            }
+            // ESC cierra
+            if(IsKeyPressed(KEY_ESCAPE)){ g_disembarkOpen=false; g_disembarkArmy=-1; }
+            // Consumir el clic para que no atraviese al mapa
+            if(g_disembarkOpen&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)&&
+               ptInRect(mouse,{mX,mY,mW,mH})){
+                return STATE_CAMPAIGN_MAP;
+            }
         }
     }
 
@@ -1461,92 +1824,198 @@ GameState updateDrawCityManagement(Vector2 mouse){
     DrawText(TextFormat("City of %s",city.name),14,10,24,C_GOLD);
     DrawLine(0,124,SCREEN_W,124,{80,65,30,150});
 
-    // Building grid (5x3 = 15 slots, but BLD_COUNT=14)
-    float gridX=14, gridY=132;
-    float cellW=(SCREEN_W-28)/5.f, cellH=110.f;
+    // ═══ v11: MATRIZ DE CONSTRUCCIÓN (izquierda) + CATÁLOGO (derecha) ═══
+    // Estado de modo de colocación: -1 = no colocando, si no BuildingType
+    static int g_placeMode=-1;
+    // Si se cambió de ciudad, cancelar modo colocación
+    static int g_placeCity=-1;
+    if(g_placeCity!=g_campaign.viewedCity){ g_placeMode=-1; g_placeCity=g_campaign.viewedCity; }
+    if(city.constructing>=0) g_placeMode=-1; // ya hay una construcción en curso
 
+    bool noOtherConstruction=(city.constructing<0);
+
+    // ── Matriz 4x4 (izquierda) ──
+    float matX=14.f, matY=132.f;
+    float matCell=92.f, matGap=4.f;
+    float matW=4.f*matCell+3.f*matGap;
+    DrawText("CITY MATRIX — click a slot to place:",(int)matX,(int)(matY-0.f),12,C_PARCHMENT);
+    matY+=18.f;
+    bool placing=(g_placeMode>=0);
+    for(int slot=0;slot<16;slot++){
+        int col=slot%4, row=slot/4;
+        float sx=matX+(float)col*(matCell+matGap);
+        float sy=matY+(float)row*(matCell+matGap);
+        Rectangle srect={sx,sy,matCell,matCell};
+        int bInSlot=city.grid[slot];
+        bool empty=(bInSlot<0);
+        bool constructingHere=(city.constructing>=0&&city.constructSlot==slot);
+        bool hoverSlot=ptInRect(mouse,srect);
+
+        Color bg;
+        if(constructingHere) bg={30,30,50,230};
+        else if(!empty) bg={25,42,25,230};
+        else if(placing&&hoverSlot) bg={45,60,35,240};
+        else if(placing) bg={35,45,30,220};
+        else bg={20,16,12,220};
+        DrawRectangleRec(srect,bg);
+        Color border=constructingHere?C_ALLY:(!empty?C_GOLD:(placing?Color{120,160,80,255}:Color{50,45,35,255}));
+        DrawRectangleLinesEx(srect,placing&&!empty?1.f:2.f,border);
+
+        if(!empty&&bInSlot<BLD_COUNT){
+            // Icono + nombre del edificio en el slot
+            Color ic=C_GOLD;
+            DrawRectangle((int)(sx+6),(int)(sy+6),16,16,ic);
+            DrawText(bldNames[bInSlot],(int)(sx+6),(int)(sy+26),10,C_PARCHMENT);
+            // Conteo si hay más de una copia
+            if(city.count[bInSlot]>1)
+                DrawText(TextFormat("x%d",city.count[bInSlot]),(int)(sx+6),(int)(sy+40),11,C_GOLD);
+            // Indicador de construcción
+            if(constructingHere)
+                DrawText(TextFormat("%d turns",city.constructTurns),(int)(sx+6),(int)(sy+matCell-16),11,{100,140,220,255});
+        } else if(empty){
+            DrawText(placing?"Place here":"-",(int)(sx+matCell/2-16),(int)(sy+matCell/2-6),11,
+                     placing?Color{140,190,100,255}:Color{60,55,45,255});
+        }
+
+        // Clic en slot mientras se coloca un edificio
+        if(placing&&empty&&!constructingHere&&hoverSlot&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)
+           &&noOtherConstruction&&netCanEdit()){
+            int bt=g_placeMode;
+            bool canAfford=(res.gold>=bldGoldCost[bt]&&res.wood>=bldWoodCost[bt]
+                            &&res.stone>=bldStoneCost[bt]&&res.iron>=bldIronCost[bt]);
+            if(canAfford){
+                res.gold-=bldGoldCost[bt]; res.wood-=bldWoodCost[bt];
+                res.stone-=bldStoneCost[bt]; res.iron-=bldIronCost[bt];
+                city.constructing=bt;
+                city.constructTurns=bldTurns[bt];
+                city.constructSlot=slot;
+                g_placeMode=-1;
+                netMarkDirty();
+            }
+        }
+    }
+    // Murallas (perímetro, fuera de la matriz)
+    {
+        float wlY=matY+4.f*(matCell+matGap)+8.f;
+        DrawText("WALLS (perimeter):",(int)matX,(int)wlY,11,C_SECONDARY);
+        float wy=wlY+16.f;
+        for(int w=0;w<2;w++){
+            int bt=(w==0)?BLD_WALLS1:BLD_WALLS2;
+            Rectangle wr={matX+(float)w*(matCell+matGap),wy,matCell,44.f};
+            bool builtW=city.built[bt];
+            bool constrW=(city.constructing==bt);
+            bool prereqW=(w==0||city.built[BLD_WALLS1]);
+            Color bg=builtW?Color{25,42,25,230}:constrW?Color{30,30,50,230}:Color{20,16,12,220};
+            DrawRectangleRec(wr,bg);
+            DrawRectangleLinesEx(wr,1,builtW?C_GOLD:constrW?C_ALLY:Color{50,45,35,255});
+            DrawText(bldNames[bt],(int)(wr.x+4),(int)(wr.y+4),10,builtW?C_GOLD:C_SECONDARY);
+            if(builtW) DrawText("active",(int)(wr.x+4),(int)(wr.y+20),10,{100,200,100,255});
+            else if(constrW) DrawText(TextFormat("%dt",city.constructTurns),(int)(wr.x+4),(int)(wr.y+20),11,{100,140,220,255});
+            else if(!prereqW) DrawText("Requires Walls Lv.1",(int)(wr.x+4),(int)(wr.y+20),9,{200,120,60,255});
+            else {
+                bool canAffordW=(res.gold>=bldGoldCost[bt]&&res.stone>=bldStoneCost[bt]);
+                if(drawSmBtn({wr.x+4,wr.y+wr.height-20,wr.width-8,16},"BUILD",mouse,
+                             canAffordW&&noOtherConstruction?Color{20,50,20,255}:Color{30,20,20,255},
+                             canAffordW&&noOtherConstruction?Color{40,90,38,255}:Color{30,20,20,255})
+                   &&canAffordW&&noOtherConstruction&&netCanEdit()){
+                    res.gold-=bldGoldCost[bt]; res.stone-=bldStoneCost[bt];
+                    city.constructing=bt; city.constructTurns=bldTurns[bt];
+                    city.constructSlot=-1;
+                    netMarkDirty();
+                }
+            }
+        }
+    }
+
+    // ── Catálogo de edificios (derecha) ──
+    float catX=matX+matW+24.f;
+    float catY=132.f;
+    float catW=(float)SCREEN_W-catX-14.f;
+    float rowH=38.f;
+    if(placing){
+        DrawText(TextFormat("PLACING %s — click an empty matrix slot (ESC to cancel):",
+                 bldNames[g_placeMode]),(int)catX,(int)(catY+2.f),11,{140,200,90,255});
+        catY+=16.f;
+        if(IsKeyPressed(KEY_ESCAPE)) g_placeMode=-1;
+    } else {
+        DrawText("BUILDINGS (duplicates give stacking bonuses):",(int)catX,(int)(catY+2.f),11,C_SECONDARY);
+        catY+=16.f;
+    }
     for(int b=0;b<BLD_COUNT;b++){
-        int col=b%5, row=b/5;
-        float bx=gridX+col*cellW;
-        float by=gridY+row*cellH;
-        float bw=cellW-6, bh=cellH-6;
-
+        // Las murallas ya se muestran en la zona de perímetro
+        if(b==BLD_WALLS1||b==BLD_WALLS2) continue;
+        if(catY+rowH>SCREEN_H-50.f) break; // no desbordar
+        float rx=catX, ry=catY, rw=catW, rh=rowH-3.f;
+        Rectangle rowRect={rx,ry,rw,rh};
+        int cnt=(int)city.count[b];
         bool built=city.built[b];
         bool constructing=(city.constructing==b);
-        bool canBuild=!built&&!constructing;
-
-        // Check prereq
-        // Fix: use the fixed prereq table below
-        static const int prereqs[BLD_COUNT]={-1,-1,1,-1,2,-1,5,5,4,-1,9,-1,-1,-1};
-        bool prereqOk=(prereqs[b]<0||city.built[prereqs[b]]);
-        // Check coast requirement for port
+        bool prereqOk=bldHasPrereq(b,city); // D6: prerrequisito único (city.cpp)
         bool terrainOk=(b==BLD_PORT)?(prov.terrain==TERRAIN_COAST):true;
-        canBuild=canBuild&&prereqOk&&terrainOk;
-
-        // Cost check
         bool canAfford=(res.gold>=bldGoldCost[b]&&res.wood>=bldWoodCost[b]
                         &&res.stone>=bldStoneCost[b]&&res.iron>=bldIronCost[b]);
-        bool noOtherConstruction=(city.constructing<0);
 
-        Color bgCol=built?Color{20,40,20,220}:constructing?Color{30,30,50,220}:Color{20,16,12,220};
-        bool hover=ptInRect(mouse,{bx,by,bw,bh});
-        if(hover&&!built) bgCol.r=clampU8(bgCol.r+15);
-        DrawRectangleRec({bx,by,bw,bh},bgCol);
-        DrawRectangleLinesEx({bx,by,bw,bh},1,built?C_GOLD:constructing?C_ALLY:Color{50,45,35,255});
+        Color rowBg=(b%2==0)?Color{18,14,10,210}:Color{14,11,8,210};
+        if(constructing) rowBg={25,28,48,220};
+        DrawRectangleRec(rowRect,rowBg);
+        DrawRectangleLinesEx(rowRect,1,constructing?C_ALLY:Color{40,36,28,200});
 
-        // Icon color patch
+        // Icono
         Color ic=built?C_GOLD:constructing?C_ALLY:Color{80,70,50,255};
-        DrawRectangle((int)(bx+4),(int)(by+4),18,18,ic);
-        DrawText(bldNames[b],(int)(bx+26),(int)(by+6),11,built?C_GOLD:C_SECONDARY);
-
-        if(built){
-            // Show yield
-            char yield[64]="";
-            if(bldGoldYield[b]>0) snprintf(yield,63,"+%.0fg",bldGoldYield[b]);
-            else if(bldFoodYield[b]>0) snprintf(yield,63,"+%.0ff",bldFoodYield[b]);
-            else if(bldWoodYield[b]>0) snprintf(yield,63,"+%.0fw",bldWoodYield[b]);
-            else if(bldStoneYield[b]>0) snprintf(yield,63,"+%.0fs",bldStoneYield[b]);
-            else if(bldIronYield[b]>0) snprintf(yield,63,"+%.0fi",bldIronYield[b]);
-            else strcpy(yield,"active");
-            DrawText(yield,(int)(bx+6),(int)(by+28),12,{100,200,100,255});
-        } else if(constructing){
-            DrawText(TextFormat("%d turns",city.constructTurns),(int)(bx+6),(int)(by+28),12,{100,140,220,255});
+        DrawRectangle((int)(rx+4),(int)(ry+6),16,16,ic);
+        // Nombre + conteo
+        char nameBuf[48];
+        if(cnt>0) snprintf(nameBuf,47,"%s x%d",bldNames[b],cnt);
+        else snprintf(nameBuf,47,"%s",bldNames[b]);
+        DrawText(nameBuf,(int)(rx+26),(int)(ry+5),12,built?C_GOLD:C_PARCHMENT);
+        // Info: coste / turno / yield
+        if(constructing){
+            DrawText(TextFormat("Building... %d turns left",city.constructTurns),
+                     (int)(rx+26),(int)(ry+20),10,{100,140,220,255});
         } else {
-            // Cost
             char costStr[80]="";
             if(bldGoldCost[b]) snprintf(costStr+strlen(costStr),79-strlen(costStr)," %dG",bldGoldCost[b]);
             if(bldWoodCost[b]) snprintf(costStr+strlen(costStr),79-strlen(costStr)," %dW",bldWoodCost[b]);
             if(bldStoneCost[b]) snprintf(costStr+strlen(costStr),79-strlen(costStr)," %dS",bldStoneCost[b]);
             if(bldIronCost[b]) snprintf(costStr+strlen(costStr),79-strlen(costStr)," %dI",bldIronCost[b]);
-            DrawText(costStr,(int)(bx+4),(int)(by+28),10,canAfford?Color{180,200,100,255}:Color{200,100,80,255});
-            DrawText(TextFormat("%dt",bldTurns[b]),(int)(bx+4),(int)(by+42),11,C_SECONDARY);
-        }
-
-        // Build button
-        if(canBuild&&noOtherConstruction){
-            Rectangle buildBtn={bx+4,by+bh-26,bw-8,22};
-            if(drawSmBtn(buildBtn,"BUILD",mouse,
-                         canAfford?Color{20,50,20,255}:Color{30,20,20,255},
-                         canAfford?Color{40,90,38,255}:Color{30,20,20,255})&&canAfford&&netCanEdit()){
-                res.gold-=bldGoldCost[b];
-                res.wood-=bldWoodCost[b];
-                res.stone-=bldStoneCost[b];
-                res.iron-=bldIronCost[b];
-                city.constructing=b;
-                city.constructTurns=bldTurns[b];
-                netMarkDirty(); // Fase H
+            DrawText(costStr,(int)(rx+26),(int)(ry+20),10,canAfford?Color{180,200,100,255}:Color{200,100,80,255});
+            DrawText(TextFormat("%dt",bldTurns[b]),(int)(rx+140),(int)(ry+20),10,C_SECONDARY);
+            // Yield actual (xN si hay copias)
+            char ybuf[48]="";
+            int mult=(cnt>0)?cnt:1;
+            if(bldGoldYield[b]>0) snprintf(ybuf,47,"+%.0fg/t",bldGoldYield[b]*mult);
+            else if(bldFoodYield[b]>0) snprintf(ybuf,47,"+%.0ff/t",bldFoodYield[b]*mult);
+            else if(bldWoodYield[b]>0) snprintf(ybuf,47,"+%.0fw/t",bldWoodYield[b]*mult);
+            else if(bldStoneYield[b]>0) snprintf(ybuf,47,"+%.0fs/t",bldStoneYield[b]*mult);
+            else if(bldIronYield[b]>0) snprintf(ybuf,47,"+%.0fi/t",bldIronYield[b]*mult);
+            else if(b==BLD_BARRACKS) snprintf(ybuf,47,"-1t recruit x%d",mult);
+            else if(b==BLD_RANGE||b==BLD_STABLE) snprintf(ybuf,47,"+veterancy x%d",mult);
+            else if(b==BLD_WATCHTOWER) snprintf(ybuf,47,"vision 2 regions");
+            else strcpy(ybuf,"active");
+            DrawText(ybuf,(int)(rx+200),(int)(ry+20),10,{100,180,100,255});
+            // Info de prerequisito / terreno
+            if(!prereqOk){
+                DrawText(TextFormat("Req: %s",bldReqName(b)),(int)(rx+340),(int)(ry+20),9,{200,120,60,255});
+            } else if(!terrainOk){
+                DrawText("Coastal only",(int)(rx+340),(int)(ry+20),9,{200,120,60,255});
             }
         }
-        if(!prereqOk&&!built&&hover){
-            // Prereq tooltip
-            int pi=prereqs[b];
-            if(pi>=0&&pi<BLD_COUNT)
-                DrawText(TextFormat("Requires: %s",bldNames[pi]),
-                         (int)(bx+4),(int)(by+bh-26),10,{200,120,60,255});
+        // Botón BUILD → entra en modo colocación (o construye directo si es pared)
+        if(noOtherConstruction&&prereqOk&&terrainOk&&!constructing){
+            Rectangle buildBtn={rx+rw-70.f,ry+7.f,64.f,rh-12.f};
+            bool hoverBtn=ptInRect(mouse,buildBtn);
+            Color btnBg=canAfford?Color{20,50,20,230}:Color{30,20,20,230};
+            Color btnHl=canAfford?Color{40,90,38,255}:Color{30,20,20,255};
+            if(hoverBtn&&canAfford) btnBg=btnHl;
+            DrawRectangleRec(buildBtn,btnBg);
+            DrawRectangleLinesEx(buildBtn,1,canAfford?Color{60,120,50,255}:Color{60,40,40,255});
+            const char* blbl=(g_placeMode==b)?"...":"BUILD";
+            DrawText(blbl,(int)(buildBtn.x+6),(int)(buildBtn.y+4),10,canAfford?C_PARCHMENT:C_SECONDARY);
+            if(hoverBtn&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)&&canAfford&&netCanEdit()){
+                g_placeMode=b; // modo colocación: elegir slot en la matriz
+            }
         }
-        if(!terrainOk&&!built){
-            DrawText("Coastal only",(int)(bx+4),(int)(by+bh-26),10,{200,120,60,255});
-        }
+        catY+=rowH;
     }
 
     // Bottom bar
@@ -1652,7 +2121,11 @@ GameState updateDrawRecruitment(Vector2 mouse){
         if(unlocked){
             DrawText(TextFormat("G:%d F:%d I:%d",td.recruitGold,td.recruitFood,td.recruitIron),
                      (int)(leftW-280),(int)(ry+8),11,C_SECONDARY);
-            DrawText(TextFormat("%d turns",td.recruitTurns),(int)(leftW-150),(int)(ry+8),11,C_SECONDARY);
+            // D2: muestra turns con bonus de Barracks (igual que la cola)
+            int effTurns=recruitTurnsFor(g_campaign.viewedCity,td.recruitTurns);
+            bool bonus=effTurns<td.recruitTurns;
+            DrawText(TextFormat("%d turns",effTurns),(int)(leftW-150),(int)(ry+8),11,
+                     bonus?Color{120,220,120,255}:C_SECONDARY);
             DrawText(TextFormat("%d soldiers",td.soldierCount),(int)(leftW-150),(int)(ry+22),11,C_SECONDARY);
             bool canAfford=(res.gold>=td.recruitGold&&res.food>=td.recruitFood&&res.iron>=td.recruitIron);
             Rectangle addBtn={leftW-80,ry+6,72,26};
@@ -1666,7 +2139,9 @@ GameState updateDrawRecruitment(Vector2 mouse){
                     netSessionSendCmd(rc);
                 }else{
                     res.gold-=td.recruitGold; res.food-=td.recruitFood; res.iron-=td.recruitIron;
-                    g_campaign.recruitQueue.push_back({t,td.recruitTurns,td.recruitTurns,(int)g_localFaction});
+                    // D2: bonus real de Barracks (-1t por copia)
+                    int rt=recruitTurnsFor(g_campaign.viewedCity,td.recruitTurns);
+                    g_campaign.recruitQueue.push_back({t,rt,rt,(int)g_localFaction});
                     netMarkDirty();
                 }
             }
@@ -1948,6 +2423,27 @@ GameState updateDrawSettings(Vector2 mouse){
     DrawText("Soldiers per Row",(int)cx,(int)(cy-labelGap),12,C_SECONDARY);
     s_uiSettings.formationPerRow=drawIntSlider({cx,cy,cw,uiPx(14.f)},s_uiSettings.formationPerRow,3,10,"",mouse,{120,100,160,200});
     cy+=lineGap;
+
+    // v11: Fase de preparación antes de la batalla (tiempo configurable)
+    DrawText("Preparation Phase",(int)cx,(int)cy,14,C_SECONDARY); cy+=uiPx(20.f);
+    {
+        float pcbS=uiPx(20.f);
+        float cbx=cx, cby=cy;
+        Rectangle pcr={(float)cbx,cby,pcbS,pcbS};
+        bool pchv=ptInRect(mouse,pcr);
+        DrawRectangleRec(pcr,s_uiSettings.usePrepPhase?Color{40,80,40,255}:pchv?Color{25,45,25,255}:Color{15,25,15,220});
+        DrawRectangleLinesEx(pcr,1,s_uiSettings.usePrepPhase?C_GOLD:Color{60,90,40,255});
+        if(s_uiSettings.usePrepPhase) DrawText("X",(int)(cbx+uiPx(5.f)),(int)(cby+uiPx(2.f)),14,C_GOLD);
+        DrawText("Enable pre-battle prep (formation select + countdown)",(int)(cbx+uiPx(28.f)),(int)(cby+uiPx(2.f)),13,C_SECONDARY);
+        if((pchv||ptInRect(mouse,{(float)cbx,(float)cby,cw,pcbS}))&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+            s_uiSettings.usePrepPhase=!s_uiSettings.usePrepPhase;
+        cy+=lineGap;
+    }
+    if(s_uiSettings.usePrepPhase){
+        DrawText("Preparation Time",(int)cx,(int)(cy-labelGap),12,C_SECONDARY);
+        s_uiSettings.prepTimeSec=drawIntSlider({cx,cy,cw,uiPx(14.f)},s_uiSettings.prepTimeSec,5,60," sec",mouse,{70,120,170,200});
+        cy+=lineGap;
+    }
 
     // Difficulty
     DrawText("Difficulty:",(int)cx,(int)cy,14,C_SECONDARY); cy+=uiPx(20.f);
@@ -2242,7 +2738,6 @@ GameState updateDrawUnitEditor(Vector2 mouse,float dt){
         float rightContentW=rightW-rightScrollBarW;
 
         // Content height (sprite + all stat rows)
-        float contentTop=ry+pad;
         float contentH=uiPx(32.f)+uiPx(120.f)+uiPx(20.f)+rowH+uiPx(4.f)+17.f*rowH+uiPx(20.f);
         float rightScrollMax=fmaxf(0.f,contentH-panelH);
         float rWheel=GetMouseWheelMove();
@@ -2751,12 +3246,13 @@ GameState updateDrawMainMenu(Vector2 mouse){
     if(drawButton({bx,menuTop+step,bw,bh},CAMPAIGN_NAMES[1],mouse)) { newCampaign(1); netMarkDirty(); return STATE_CAMPAIGN_MAP; }
     if(drawButton({bx,menuTop+step*2.f,bw,bh},CAMPAIGN_NAMES[2],mouse)) { newCampaign(2); netMarkDirty(); return STATE_CAMPAIGN_MAP; }
     if(drawButton({bx,menuTop+step*3.f,bw,bh},CAMPAIGN_NAMES[3],mouse)) { newCampaign(3); netMarkDirty(); return STATE_CAMPAIGN_MAP; }
-    if(drawButton({bx,menuTop+step*4.f,bw,bh},"CONTINUE",mouse,
+    if(drawButton({bx,menuTop+step*4.f,bw,bh},CAMPAIGN_NAMES[4],mouse)) { newCampaign(4); netMarkDirty(); return STATE_CAMPAIGN_MAP; }
+    if(drawButton({bx,menuTop+step*5.f,bw,bh},"CONTINUE",mouse,
                   g_hasSave?Color{40,55,40,255}:Color{30,30,30,255},
                   g_hasSave?Color{70,110,60,255}:Color{30,30,30,255})&&g_hasSave){
         if(loadGame()){ netMarkDirty(); return STATE_CAMPAIGN_MAP; }
     }
-    if(drawButton({bx,menuTop+step*5.f,bw,bh},"QUICK BATTLE",mouse)){
+    if(drawButton({bx,menuTop+step*6.f,bw,bh},"QUICK BATTLE",mouse)){
         g_quickSetup.playerCounts.assign(unitTypeCount(),0);
         g_quickSetup.enemyCounts.assign(unitTypeCount(),0);
         if(unitTypeCount()>0){
@@ -2768,14 +3264,14 @@ GameState updateDrawMainMenu(Vector2 mouse){
         }
         return STATE_QUICK_BATTLE_SETUP;
     }
-    if(drawButton({bx,menuTop+step*6.f,bw,bh},"UNIT EDITOR",mouse)){
+    if(drawButton({bx,menuTop+step*7.f,bw,bh},"UNIT EDITOR",mouse)){
         return STATE_UNIT_EDITOR;
     }
-    if(drawButton({bx,menuTop+step*7.f,bw,bh},"MULTIPLAYER",mouse)){
+    if(drawButton({bx,menuTop+step*8.f,bw,bh},"MULTIPLAYER",mouse)){
         return STATE_MULTIPLAYER;
     }
-    if(drawButton({bx,menuTop+step*8.f,bw,bh},"SETTINGS",mouse)) return STATE_SETTINGS;
-    if(drawButton({bx,menuTop+step*9.f,bw,bh},"EXIT",mouse,{60,28,28,255},{100,45,45,255})){
+    if(drawButton({bx,menuTop+step*9.f,bw,bh},"SETTINGS",mouse)) return STATE_SETTINGS;
+    if(drawButton({bx,menuTop+step*10.f,bw,bh},"EXIT",mouse,{60,28,28,255},{100,45,45,255})){
         g_quitRequested=true;
     }
 

@@ -20,7 +20,8 @@
 
 const char* getCampaignSavePath(int id){
     static char buf[32];
-    if(id<0) id=0; if(id>=MAX_CAMPAIGNS) id=MAX_CAMPAIGNS-1;
+    if(id<0) id=0;
+    if(id>=MAX_CAMPAIGNS) id=MAX_CAMPAIGNS-1;
     sprintf(buf, "campaign_%d.dat", id);
     return buf;
 }
@@ -62,10 +63,14 @@ bool serializeCampaignState(const CampaignState& st, std::vector<char>& out){
         bw1(out,p.hasCity);
         if(p.hasCity){
             bw(out,p.city.name,32);
-            bw(out,p.city.built,sizeof(bool)*BLD_COUNT);
+            bw(out,p.city.built,sizeof(bool)*BLD_COUNT); // v11: 15 bools
             bw1(out,p.city.constructing);
             bw1(out,p.city.constructTurns);
             bw1(out,p.city.defBonus);
+            // v11: matriz de construcción + conteo + slot de construcción
+            bw(out,p.city.grid,sizeof(int)*16);
+            bw(out,p.city.count,sizeof(unsigned char)*BLD_COUNT);
+            bw1(out,p.city.constructSlot);
         }
         int nadj=(int)p.adjacent.size();
         bw1(out,nadj);
@@ -96,7 +101,9 @@ bool serializeCampaignState(const CampaignState& st, std::vector<char>& out){
     for(const auto& a:st.armies){
         int id=a.id, prov=a.province, own=(int)a.owner;
         unsigned char mv=a.moved?1:0;
-        bw1(out,id); bw1(out,own); bw1(out,prov); bw1(out,mv);
+        unsigned char sh=a.isShip?1:0;
+        bw1(out,id); bw1(out,own); bw1(out,prov); bw1(out,mv); bw1(out,sh); // v11: isShip
+        bw1(out,a.veterancy); // v12: veteranía del ejército (D2)
         int nu=(int)a.units.size();
         bw1(out,nu);
         for(const auto& u:a.units){ bw1(out,u.first); bw1(out,u.second); }
@@ -141,8 +148,9 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
     if(!data||size<sizeof(int)) return false;
     BufReader b{data,size};
     int ver=b.r1<int>();
-    // PvP: aceptar v8 (defaults PvP), v9 (campos PvP) y v10 (reserva por facción)
-    if(!b.ok||(ver!=SAVE_VERSION&&ver!=8&&ver!=9)) return false;
+    // Compat: v8 (base), v9 (PvP dos reinos), v10 (reserva por facción),
+    // v11 (matriz/barcos/atalaya), v12 (veteranía — D2)
+    if(!b.ok||ver<8||ver>SAVE_VERSION) return false;
 
     st.campaignId=b.r1<int>();
     st.turn=b.r1<int>();
@@ -169,10 +177,25 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
         p.hasCity=b.r1<bool>();
         if(p.hasCity){
             b.r(p.city.name,32);
-            b.r(p.city.built,sizeof(bool)*BLD_COUNT);
+            if(ver>=11){
+                b.r(p.city.built,sizeof(bool)*BLD_COUNT); // 15 bools
+            } else {
+                b.r(p.city.built,sizeof(bool)*BLD_COUNT_V10); // 14 bools (v8-v10)
+                p.city.built[BLD_WATCHTOWER]=false;
+            }
             p.city.constructing=b.r1<int>();
             p.city.constructTurns=b.r1<int>();
             p.city.defBonus=b.r1<float>();
+            if(ver>=11){
+                b.r(p.city.grid,sizeof(int)*16);
+                b.r(p.city.count,sizeof(unsigned char)*BLD_COUNT);
+                p.city.constructSlot=b.r1<int>();
+            } else {
+                // v8-v10: defaults — grid vacío, count=1 por built, slot=-1
+                for(int s=0;s<16;s++) p.city.grid[s]=-1;
+                for(int bi=0;bi<BLD_COUNT;bi++) p.city.count[bi]=p.city.built[bi]?1:0;
+                p.city.constructSlot=-1;
+            }
         }
         int nadj=b.r1<int>();
         if(!b.ok||nadj<0||nadj>64) return false;
@@ -225,6 +248,8 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
         FieldArmy a;
         int id=b.r1<int>(), own=b.r1<int>(), prov=b.r1<int>();
         unsigned char mv=b.r1<unsigned char>();
+        if(ver>=11){ unsigned char sh=b.r1<unsigned char>(); a.isShip=(sh!=0); }
+        if(ver>=12){ a.veterancy=b.r1<int>(); } // D2: veteranía (v<12 = 0)
         int nu=b.r1<int>();
         if(!b.ok||nu<0||nu>256) return false;
         a.id=id; a.owner=(FactionId)own; a.province=prov; a.moved=(mv!=0);
@@ -247,8 +272,10 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
     // Fase I: diplomacia — alianzas militares + pactos comerciales
     b.r(st.allied,sizeof(bool)*FACTION_COUNT);
     b.r(st.tradePact,sizeof(bool)*FACTION_COUNT);
-    // PvP (v9): dos reinos separados (v8 = defaults: co-op)
-    if(ver==9||ver==10){
+    // PvP (v9+): dos reinos separados (v8 = defaults: co-op)
+    // NOTA: el serializer escribe este bloque desde v9; leer desde v9 (antes
+    // solo se leía en v9/v10 => en v11 se perdía el estado PvP al cargar)
+    if(ver>=9){
         unsigned char pvp=b.r1<unsigned char>();
         int cf=b.r1<int>();
         st.pvpMode=(pvp!=0);
@@ -259,9 +286,9 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
         st.clientFaction=FACTION_AGGRESSIVE;
         st.clientRes=Resources();
     }
-    // PvP (v10): reserva por facción — clientReserve + faccion de la cola
+    // PvP (v10+): reserva por facción — clientReserve + faccion de la cola
     // (v9 u older = defaults: reserva común, facciones de la cola = PLAYER)
-    if(ver==10){
+    if(ver>=10){
         int nCR=b.r1<int>();
         if(!b.ok||nCR<0||nCR>512) return false;
         for(int i=0;i<nCR;i++){

@@ -41,6 +41,10 @@ struct BattleState {
     // Control groups (Ctrl+1..9 / 1..9)
     ControlGroup controlGroups[9];
     int          activeControlGroup;  // -1 = none; set when user presses 1-9
+    // v11: fase de preparación pre-batalla (formaciones + tiempo configurable)
+    bool         prepPhase;           // true = aún en preparación (movimiento bloqueado)
+    float        prepTimer;           // segundos restantes
+    int          prepFormation;       // 0=line,1=column,2=square,3=loose
 };
 
 // (:650-660)
@@ -74,10 +78,11 @@ void autoResolveBattle(const std::vector<std::pair<int,int>>& playerGroups,
                        float defBonus);
 
 // Funciones de combate (definiciones en combat.cpp)
+// D2: playerVet/enemyVet = veteranía inicial (0..3) de cada bando (Range+Stable)
 void initBattle(const std::vector<std::pair<int,int>>& playerGroups,
                 const std::vector<std::pair<int,int>>& enemyGroups,
                 TerrainType terrain,int provinceIdx,bool isDefense,
-                const char* scenarioName);                                      // (:1446)
+                const char* scenarioName,int playerVet=0,int enemyVet=0); // (:1446)
 float soldierMeleeRadius(const UnitTypeDef& td);                                // (:1567)
 float calcMeleeDmg(const UnitTypeDef& attTd,const UnitTypeDef& defTd,bool chargeBonus); // (:1571)
 float calcMissileDmg(const UnitTypeDef& attTd,const UnitTypeDef& defTd);        // (:1581)

@@ -1,4 +1,4 @@
-// src/save.h — Serialización binaria (formato actual: binario con SAVE_VERSION=10)
+// src/save.h — Serialización binaria (formato actual: binario con SAVE_VERSION=12)
 #pragma once
 
 #include <vector>
@@ -6,8 +6,8 @@
 struct CampaignState;
 
 inline const char* CAMPAIGN_LAST_FILE = "campaign_last.dat";
-inline const int   MAX_CAMPAIGNS      = 4;
-inline const char* CAMPAIGN_NAMES[MAX_CAMPAIGNS] = { "The Realm", "Northern Isles", "Eastern March", "Great Continent" };
+inline const int   MAX_CAMPAIGNS      = 5;
+inline const char* CAMPAIGN_NAMES[MAX_CAMPAIGNS] = { "The Realm", "Northern Isles", "Eastern March", "Great Continent", "Europa" };
 
 const char* getCampaignSavePath(int id);
 bool saveGame();        // true si el guardado en disco tuvo éxito

@@ -143,7 +143,7 @@ void autoResolveBattle(const std::vector<std::pair<int,int>>& playerGroups,
 void initBattle(const std::vector<std::pair<int,int>>& playerGroups,
                         const std::vector<std::pair<int,int>>& enemyGroups,
                         TerrainType terrain,int provinceIdx,bool isDefense,
-                        const char* scenarioName){
+                        const char* scenarioName,int playerVet,int enemyVet){
     g_battle={};
     fxClear();
     atmosReset();
@@ -157,8 +157,19 @@ void initBattle(const std::vector<std::pair<int,int>>& playerGroups,
     // Camera centered on player deployment zone (extraído a camera.cpp)
     initBattleCamera();
 
-    // Generate terrain obstacles (extraído a terrain.cpp)
-    generateTerrainObstacles(terrain, provinceIdx, g_battle.obstacles);
+    // v11: fase de preparación con formaciones (si está activa en ajustes)
+    g_battle.prepPhase=g_settings.usePrepPhase;
+    g_battle.prepTimer=(float)g_settings.prepTimeSec;
+    g_battle.prepFormation=0; // línea por defecto
+    // D8: la formación de ESTA batalla copia los defaults del usuario; el
+    // selector pre-batalla muta solo estas globales (g_settings intacto)
+    g_formPerRow=g_settings.formationPerRow;
+    g_formSpacing=g_settings.formationSpacing;
+
+    // Generate terrain obstacles (extraído a terrain.cpp; v11: incluye ciudad si la hay)
+    bool provHasCity=(provinceIdx>=0&&provinceIdx<(int)g_campaign.provinces.size()&&
+                      g_campaign.provinces[provinceIdx].hasCity);
+    generateTerrainObstacles(terrain, provinceIdx, g_battle.obstacles, provHasCity);
 
     // Player units — left side
     float py=BATTLE_H/2.f;
@@ -174,7 +185,7 @@ void initBattle(const std::vector<std::pair<int,int>>& playerGroups,
         formationDims(n,&cols,&rows);
         if(cols>maxCols) maxCols=cols;
     }
-    float groupSpan=(float)(maxCols-1)*g_settings.formationSpacing+36.f;
+    float groupSpan=(float)(maxCols-1)*g_formSpacing+36.f;
     for(int gi=0;gi<(int)playerGroups.size();gi++){
         auto [typeIdx,cnt]=playerGroups[gi];
         if(typeIdx>=unitTypeCount()||cnt<=0) continue;
@@ -186,7 +197,7 @@ void initBattle(const std::vector<std::pair<int,int>>& playerGroups,
         bu.orderAttack=-1;
         bu.morale=td.morale;
         bu.groupState=UGS_IDLE;
-        bu.veterancy=0;
+        bu.veterancy=playerVet; // D2: Range/Stable de la ciudad (0..3)
         bu.aiReactTimer=0.f;
         bu.orderType=0; // 6.6: attack order type
         bu.formationFacing=0.f; // 6.6: facing angle (0 = right)
@@ -221,7 +232,7 @@ void initBattle(const std::vector<std::pair<int,int>>& playerGroups,
         formationDims(n,&cols,&rows);
         if(cols>maxColsE) maxColsE=cols;
     }
-    float groupSpanE=(float)(maxColsE-1)*g_settings.formationSpacing+36.f;
+    float groupSpanE=(float)(maxColsE-1)*g_formSpacing+36.f;
     for(int gi=0;gi<(int)enemyGroups.size();gi++){
         auto [typeIdx,cnt]=enemyGroups[gi];
         if(typeIdx>=unitTypeCount()||cnt<=0) continue;
@@ -233,7 +244,7 @@ void initBattle(const std::vector<std::pair<int,int>>& playerGroups,
         bu.orderAttack=-1;
         bu.morale=td.morale;
         bu.groupState=UGS_IDLE;
-        bu.veterancy=0;
+        bu.veterancy=enemyVet; // D2: guarnición con Range/Stable (0..3)
         bu.aiReactTimer=0.f;
         bu.orderType=0; // 6.6: attack order type
         bu.formationFacing=180.f; // 6.6: facing angle (180 = left for enemies)
@@ -404,7 +415,7 @@ bool separateSoldiers(std::vector<BattleUnit>& units){
     // rejilla espacial (antes O(n^2) completo: 88ms a 1920 soldados).
     // Fase A.2: hasta 8 pasadas — con ejercitos multi-grupo densos (16x60)
     // 4 dejaban pares a 19.5px; el early-break hace gratis lo que no necesita.
-    float minD=g_settings.formationSpacing;
+    float minD=g_formSpacing;
     std::vector<Soldier*> all;
     for(auto& bu:units)
         for(auto& s:bu.soldiers)
@@ -519,7 +530,7 @@ void drawSoldierDebug(){
     paintTeam(g_battle.playerUnits,Color{0,255,255,255}); // cian = jugador
     paintTeam(g_battle.enemyUnits,Color{255,0,255,255});   // magenta = enemigo
     // Valor efectivo de spacing + marcas blancas en pares <18px (solapamiento)
-    DrawText(TextFormat("spacing=%.0f",g_settings.formationSpacing),10,110,16,WHITE);
+    DrawText(TextFormat("spacing=%.0f",g_formSpacing),10,110,16,WHITE);
     std::vector<Vector2> ps;
     std::vector<char> tm; // 0=jugador 1=enemigo
     for(auto& bu:g_battle.playerUnits) for(auto& s:bu.soldiers) if(s.alive){ ps.push_back(s.pos); tm.push_back(0); }
@@ -556,7 +567,7 @@ void drawSoldierDebug(){
         }
         prevAng=cur;
         fprintf(fp,"sp=%.0f row=%d zoom=%.2f same=%.1f cross=%.1f n=%d maxdA=%.1f big=%d st=%d,%d,%d,%d,%d,%d a=(%.0f,%.0f) b=(%.0f,%.0f)\n",
-                    g_settings.formationSpacing,g_settings.formationPerRow,g_battle.cam.zoom,
+                    g_formSpacing,g_formPerRow,g_battle.cam.zoom,
                     ms,mc,(int)ps.size(),maxd,big,bst[0],bst[1],bst[2],bst[3],bst[4],bst[5],msA.x,msA.y,msB.x,msB.y);
         fclose(fp);
     }
@@ -694,7 +705,7 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
                     int mrc=1,mrr=1,frc=1,frr=1;
                     formationDims((int)bu.soldiers.size(),&mrc,&mrr);
                     formationDims((int)foeUnits[targetIdx].soldiers.size(),&frc,&frr);
-                    float sp=g_settings.formationSpacing;
+                    float sp=g_formSpacing;
                     float baseGap=(float)(mrr-1)*sp+(float)(frr-1)*sp
                         +soldierMeleeRadius(td)+soldierMeleeRadius(g_unitTypes[foeTi])+6.f;
                     float holdDist=baseGap+(float)td.range*0.85f;
@@ -710,7 +721,7 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
                     int mc=1,mr=1,fc=1,fr=1;
                     formationDims((int)bu.soldiers.size(),&mc,&mr);
                     formationDims((int)foeUnits[targetIdx].soldiers.size(),&fc,&fr);
-                    float sp=g_settings.formationSpacing;
+                    float sp=g_formSpacing;
                     float engagementDistance=
                         (float)(mr-1)*sp+(float)(fr-1)*sp
                         +soldierMeleeRadius(td)+soldierMeleeRadius(g_unitTypes[foeTi])+6.f;
@@ -867,6 +878,7 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
                 if(sol.meleeTimer<=0){
                     bool chargeBonus=sol.chargeReady&&td.spriteBase==SPR_CAVALRY;
                     float dmg=calcMeleeDmg(td,fTd,chargeBonus);
+                    dmg*=1.f+0.075f*(float)bu.veterancy; // D2: +7.5% daño/nivel (Range+Stable)
                     if(chargeBonus&&dmg>0){
                         sol.chargeReady=false;
                         tgt.pos=v2add(tgt.pos,v2scale(dir2,12.f));
@@ -909,6 +921,7 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
                 if(losClean(sol.pos,tgt.pos,bu.soldiers,si)){
                     sol.state=SS_ATTACKING_RANGED;
                     float dmg=calcMissileDmg(td,fTd);
+                    dmg*=1.f+0.075f*(float)bu.veterancy; // D2: +7.5% daño/nivel
                     bool isCross=(td.missileReload>2.5f);
                     float projSpeed=isCross?380.f:320.f;
                     g_battle.projs.push_back({sol.pos,v2scale(dir2,projSpeed),dmg,true,bu.isPlayer,isCross});
@@ -1094,7 +1107,7 @@ void drawBattlefield(){
     // Variation noise (static, initialized once)
     static bool terrainInit=false;
     static Image terrainNoise;
-    static Texture2D terrainTex={0};
+    static Texture2D terrainTex{};
     if(!terrainInit){
         terrainNoise=GenImageColor(BATTLE_W,BATTLE_H,C_TERRAIN);
         srand(42);
@@ -1120,13 +1133,30 @@ void drawBattlefield(){
     // Center line
     DrawLine(BATTLE_W/2,0,BATTLE_W/2,BATTLE_H,{50,70,35,100});
 
-    // Obstacles
+    // Obstacles (v11: colores por terreno — ríos/lagos azul, montaña gris, bosque verde, ciudad marrón)
     for(auto& obs:g_battle.obstacles){
-        Color oc;
-        if(g_battle.terrain==TERRAIN_FOREST) oc={25,55,20,200};
-        else oc={90,80,70,200};
+        Color oc, edge;
+        switch(g_battle.terrain){
+            case TERRAIN_FOREST:
+                oc={25,55,20,200};  edge={20,45,15,255}; break;
+            case TERRAIN_MOUNTAIN:
+                oc={90,80,70,200};  edge={60,55,50,255}; break;
+            case TERRAIN_COAST:
+                // Costa: lagos/rocas — azul agua + arena
+                oc={50,90,130,190}; edge={90,130,160,255}; break;
+            default: // PLAIN
+                // Río (rect muy largo y fino) → azul; colinas → marrón
+                if(obs.width>400.f||obs.height>400.f){ oc={55,100,150,200}; edge={90,140,180,255}; }
+                else { oc={105,95,75,200}; edge={75,68,52,255}; }
+                break;
+        }
         DrawRectangleRec(obs,oc);
-        DrawRectangleLinesEx(obs,2,{20,45,15,255});
+        DrawRectangleLinesEx(obs,2,edge);
+    }
+    // Ciudades: indicador de puerta en el centro del muro (si hay muralla)
+    if(g_battle.terrain==TERRAIN_PLAIN||g_battle.terrain==TERRAIN_COAST){
+        // Puente: marcar el hueco dejado en el río con dos "pilares" de madera
+        // (solo visual; el hueco ya es pasable porque no es obstáculo)
     }
 
     // Deployment zones (faint)
@@ -1317,6 +1347,76 @@ void drawAllUnits(){
 // ═══════════════════════════════════════════════════════════════════════════
 void drawBattleHUD(Vector2 mouse){
     int hudY=SCREEN_H-HUD_H;
+
+    // ═══ v11: OVERLAY DE PREPARACIÓN (formaciones + cuenta atrás) ═══
+    if(g_battle.prepPhase){
+        DrawRectangle(0,0,SCREEN_W,SCREEN_H,{0,0,0,120});
+        float boxW=uiPx(640.f), boxH=uiPx(320.f);
+        float bx=(SCREEN_W-boxW)*0.5f, by=(SCREEN_H-boxH)*0.5f;
+        DrawRectangle((int)bx,(int)by,(int)boxW,(int)boxH,{16,14,10,245});
+        DrawRectangleLinesEx({bx,by,boxW,boxH},2,C_GOLD);
+        DrawText("BATTLE PREPARATION",(int)(bx+20),(int)(by+14),24,C_GOLD);
+        DrawText("Set your formation — movement is locked until the battle begins",
+                 (int)(bx+20),(int)(by+48),11,C_SECONDARY);
+        // Cuenta atrás grande
+        int secs=(int)ceilf(g_battle.prepTimer);
+        char tbuf[32]; snprintf(tbuf,31,"0:%02d",secs);
+        int tw=MeasureText(tbuf,48);
+        Color tcol=secs<=5?Color{230,90,70,255}:C_PARCHMENT;
+        DrawText(tbuf,(int)(bx+boxW*0.5f-tw*0.5f),(int)(by+70),48,tcol);
+        DrawText("seconds remaining",(int)(bx+boxW*0.5f-70),(int)(by+124),11,C_SECONDARY);
+
+        // Selector de formación: 4 botones
+        static const char* formNames[4]={"LINE","COLUMN","SQUARE","LOOSE"};
+        static const char* formDesc[4]={"Wide frontage","Deep column","Balanced box","Spread out"};
+        float fbtnW=(boxW-60.f)/4.f, fbtnH=uiPx(54.f);
+        float fx0=bx+16.f, fy0=by+156.f;
+        for(int f=0;f<4;f++){
+            Rectangle fr={fx0+(float)f*(fbtnW+6.f),fy0,fbtnW,fbtnH};
+            bool hovF=ptInRect(mouse,fr);
+            bool selF=(g_battle.prepFormation==f);
+            Color bg=selF?Color{50,70,30,255}:(hovF?Color{35,40,30,255}:Color{22,20,16,255});
+            DrawRectangleRec(fr,bg);
+            DrawRectangleLinesEx(fr,selF?2.f:1.f,selF?C_GOLD:Color{70,65,50,255});
+            int nw=MeasureText(formNames[f],13);
+            DrawText(formNames[f],(int)(fr.x+fbtnW*0.5f-nw*0.5f),(int)(fr.y+8),13,
+                     selF?C_GOLD:C_PARCHMENT);
+            int dw=MeasureText(formDesc[f],9);
+            DrawText(formDesc[f],(int)(fr.x+fbtnW*0.5f-dw*0.5f),(int)(fr.y+30),9,C_SECONDARY);
+            if(hovF&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)){
+                g_battle.prepFormation=f;
+                // Aplicar la formación ajustando parámetros (afecta a calcFormationSlots)
+                switch(f){
+                    case 0: g_formPerRow=8; g_formSpacing=24.f; break;
+                    case 1: g_formPerRow=3; g_formSpacing=22.f; break;
+                    case 2: g_formPerRow=5; g_formSpacing=26.f; break;
+                    case 3: g_formPerRow=6; g_formSpacing=34.f; break;
+                }
+                // Recalcular slots de los soldados desplegados
+                for(auto& bu:g_battle.playerUnits){
+                    auto slots=calcFormationSlots(bu.anchorPos,(int)bu.soldiers.size(),
+                                                  bu.formationFacing);
+                    for(int s=0;s<(int)bu.soldiers.size()&&s<(int)slots.size();s++)
+                        bu.soldiers[s].formationSlot=slots[s];
+                }
+                battleLogAdd(TextFormat("Formation set: %s",formNames[f]));
+            }
+        }
+        // Botón BEGIN BATTLE
+        Rectangle begR={bx+boxW*0.5f-uiPx(110.f),by+boxH-uiPx(64.f),uiPx(220.f),uiPx(44.f)};
+        bool hovB=ptInRect(mouse,begR);
+        DrawRectangleRec(begR,hovB?Color{55,110,45,255}:Color{35,75,30,255});
+        DrawRectangleLinesEx(begR,2,C_GOLD);
+        const char* blbl="BEGIN BATTLE!";
+        int bw2=MeasureText(blbl,18);
+        DrawText(blbl,(int)(begR.x+begR.width*0.5f-bw2*0.5f),(int)(begR.y+12),18,C_PARCHMENT);
+        if(hovB&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)){
+            g_battle.prepPhase=false;
+            battleLogAdd("Battle begins!");
+        }
+        // No se dibuja el resto del HUD durante la preparación
+        return;
+    }
 
     // Top bar
     DrawRectangle(0,0,SCREEN_W,TOPBAR_H,{0,0,0,220});

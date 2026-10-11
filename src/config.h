@@ -83,8 +83,10 @@ enum BuildingType {
     BLD_MARKET=0, BLD_FARM, BLD_SAWMILL, BLD_QUARRY, BLD_SMITHY,
     BLD_BARRACKS, BLD_STABLE, BLD_RANGE, BLD_WORKSHOP,
     BLD_WALLS1, BLD_WALLS2, BLD_MAGETOWER, BLD_TEMPLE, BLD_PORT,
+    BLD_WATCHTOWER,
     BLD_COUNT
 };
+inline const int BLD_COUNT_V10 = 14; // compat de guardados anteriores a la atalaya
 enum FactionId { FACTION_PLAYER=0, FACTION_AGGRESSIVE, FACTION_DEFENSIVE, FACTION_COMMERCIAL, FACTION_PIRATE, FACTION_NEUTRAL, FACTION_COUNT };
 enum TerrainType { TERRAIN_PLAIN=0, TERRAIN_FOREST, TERRAIN_MOUNTAIN, TERRAIN_COAST };
 enum SoldierState { SS_IDLE=0, SS_MOVING_SLOT, SS_MOVING_TARGET, SS_ATTACKING_MELEE, SS_ATTACKING_RANGED, SS_FLEEING };
@@ -111,13 +113,16 @@ struct GameSettings {
     // Realismo de combate: formacion (afecta a calcFormationSlots y separacion)
     float formationSpacing = 26.f;  // px entre soldados (16..40)
     int   formationPerRow  = 5;     // soldados por fila en formacion (3..10)
+    // Pre-batalla: fase de preparación de formaciones (feature nueva)
+    int   prepTimeSec      = 15;    // segundos de preparación antes de la batalla (5..60)
+    bool  usePrepPhase     = true;  // activar fase de preparación con formaciones
 };
 extern GameSettings g_settings;
 void saveSettings();
 void loadSettings();
 
 // === GUARDADO ===
-inline const int SAVE_VERSION = 10;  // 10: PvP reserva por facción (clientReserve + RecruitEntry.faction)
+inline const int SAVE_VERSION = 12;  // 12: veteranía por ejército (D2) — 11: matriz, edificios repetibles, atalaya, barcos
 
 // === ESTADO GLOBAL (:681-684) ===
 extern GameState g_state;

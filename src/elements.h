@@ -122,4 +122,11 @@ struct ControlGroup {
 void drawStatBars(float x,float y,float w,float h,const UnitTypeDef& td);
 // (:1404)
 std::vector<Vector2> calcFormationSlots(Vector2 anchor,int count,float facing);
-void formationDims(int count,int* cols,int* rows);   // columnas/filas segun g_settings.formationPerRow
+void formationDims(int count,int* cols,int* rows);   // columnas/filas segun g_formPerRow
+
+// D8: parametros de formacion POR BATALLA (no mutan g_settings). initBattle
+// los copia desde g_settings (defaults del usuario); el selector pre-batalla
+// solo toca estos valores => no se persisten en settings.ini ni contaminan
+// la siguiente batalla.
+extern int   g_formPerRow;   // soldados por fila (3..10)
+extern float g_formSpacing;  // px entre soldados (16..40)

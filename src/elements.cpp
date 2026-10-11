@@ -22,6 +22,10 @@ std::vector<UnitTypeDef> g_vanillaUnitTypes;  // copy of builtin types at init (
 std::vector<Texture2D>   g_playerTextures;
 std::vector<Texture2D>   g_enemyTextures;
 
+// D8: formacion de la batalla actual (copiada de g_settings en initBattle)
+int   g_formPerRow  = 5;
+float g_formSpacing = 26.f;
+
 void initBuiltinTypes(){
     g_unitTypes.clear();
     // Helper lambda
@@ -104,11 +108,11 @@ void drawStatBars(float x,float y,float w,float h,const UnitTypeDef& td){
 
 //  BATTLE FORMATION HELPERS (v7.0: LINE FORMATION - rectangular 360° rotation)
 // ═══════════════════════════════════════════════════════════════════════════
-// Dimensiones de la formacion: columnas = g_settings.formationPerRow (ajustable
-// en Settings, limitado al conteo de soldados).
+// Dimensiones de la formacion: columnas = g_formPerRow (parametro por batalla;
+// D8: el selector pre-batalla NO muta g_settings).
 void formationDims(int count,int* cols,int* rows){
     if(count<1) count=1;
-    int c=g_settings.formationPerRow;
+    int c=g_formPerRow;
     if(c<1) c=1;
     if(c>count) c=count;
     *cols=c;
@@ -122,9 +126,9 @@ std::vector<Vector2> calcFormationSlots(Vector2 anchor,int count,float facing){
     int cols=1,rows=1;
     formationDims(count,&cols,&rows);
 
-    // Spacing configurable (Settings -> formationSpacing); default 26px para
-    // que las hojas bakeadas (~24px de ancho) no se fundan en un blob.
-    float spacing=g_settings.formationSpacing;
+    // Spacing por batalla (g_formSpacing); default 26px para que las hojas
+    // bakeadas (~24px de ancho) no se fundan en un blob.
+    float spacing=g_formSpacing;
 
     // Facing direction vector (0° = right, 90° = down, 180° = left, 270° = up)
     float rad=facing*DEG2RAD;

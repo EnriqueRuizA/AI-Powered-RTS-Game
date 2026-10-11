@@ -16,10 +16,14 @@ inline const Color factionColors[FACTION_COUNT]={
 // (:455-461)
 struct City {
     char     name[32];
-    bool     built[BLD_COUNT];   // completed buildings
+    bool     built[BLD_COUNT];   // completed buildings (true si count>=1)
     int      constructing;       // -1 = nothing, else BuildingType
     int      constructTurns;     // turns remaining
     float    defBonus;           // from walls
+    // v11: matriz de construcción 4x4 + edificios repetibles
+    int      grid[16];           // slots de construcción (tipo o -1; murallas fuera)
+    unsigned char count[BLD_COUNT]; // nº de copias de cada edificio
+    int      constructSlot;      // slot destino (-1 = auto / perímetro para murallas)
 };
 
 // (:475-486)
@@ -51,6 +55,11 @@ struct FieldArmy {
     int      province=0;   // provincia donde se encuentra
     bool     moved=false;  // ya se movió/atacó este turno
     std::vector<std::pair<int,int>> units; // {typeIdx, soldierCount}
+    bool     isShip=false; // v11: true = ejército embarcado (se mueve por costa)
+    // D2: veteranía inicial por Range/Stable (0..3). Se asigna al formar el
+    // ejército en una ciudad con esos edificios; initBattle la pasa a las
+    // unidades del jugador (SAVE_VERSION=12).
+    int      veterancy=0;
 };
 
 // Fase J: índices de los tipos de unidad héroe (initBuiltinTypes)
@@ -82,8 +91,10 @@ struct CampaignState {
     std::vector<FieldArmy> armies;
     int              selectedArmy=-1;
     int              nextArmyId=1;
-    // 6.3: Fog of war — explored provinces
-    bool             explored[32]={};   // true if province has been seen
+    // 6.3: Fog of war — explored provinces (D1: tamaño dinámico = nº real de
+    // provincias; el array fijo de 32 dejaba Europa con niebla permanente en
+    // las provincias 32-35)
+    std::vector<bool> explored;         // true if province has been seen
     // Fase D+: facciones aliadas con el jugador (persistencia en Fase I)
     bool             allied[FACTION_COUNT]={};
     // Fase I: pactos comerciales bilaterales con el jugador (con cualquier pais)
@@ -175,6 +186,7 @@ void newCampaign(int campaignId);                // (:1224)
 bool processTurn();                              // (:1248) — Fase J: true = hay batalla pendiente (defensa IA)
 void drawGarrisonArmiesPanel(Province& prov, float gridY, float cellH, Vector2 mouse); // (:820)
 void drawCampaignMovementArrows();               // (:849)
+void updateFogOfWar();                           // v11: niebla con atalaya (2 saltos)
 
 // Fase J: ejércitos de campo
 int  armyIndexAt(int province, FactionId owner);      // primer ejército de `owner` en provincia (-1)
@@ -187,5 +199,14 @@ int  defenseSoldiers(int province);                   // soldados del jugador en
 bool armyHasKing(const std::vector<std::pair<int,int>>& units);
 void mergePlayerDefenders(int province);              // fusiona ejércitos del jugador en la provincia
 int  safeRetreatProvince(int from);                   // provincia propia adyacente (-1 si no hay)
+// D2: bonus reales de edificios (antes solo pintados en UI)
+// Turns de reclutamiento con bonus de Barracks: max(1, base - copias Barracks)
+int  recruitTurnsFor(int province, int baseTurns);
+// Veteranía inicial (0..3) = copias de Range + Stable en la ciudad de la
+// provincia (sin ciudad o ajena → 0)
+int  cityVeterancy(int province);
+// v11: navegación — un barco alcanza `to` si es adyacente, o si hay una
+// provincia costera intermedia adyacente a ambas (ruta marítima de 2 saltos)
+bool shipCanReach(int from, int to);
 std::vector<std::pair<int,int>> subtractEnemyLosses(
     const std::vector<std::pair<int,int>>& units, int losses); // approx: bajas enemigas

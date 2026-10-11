@@ -64,10 +64,85 @@ static bool isHeroType(int ti){
     return ti==UNIT_GENERAL||ti==UNIT_KING;
 }
 
+// v11: inicialización correcta de City (grid=-1, count=0, constructSlot=-1)
+static void initCity(City& c, const char* nm, FactionId owner){
+    memset(&c,0,sizeof c);
+    strncpy(c.name,nm,sizeof(c.name)-1); c.name[sizeof(c.name)-1]='\0';
+    c.constructing=-1; c.constructTurns=0; c.defBonus=1.0f;
+    for(int i=0;i<16;i++) c.grid[i]=-1;
+    for(int b=0;b<BLD_COUNT;b++){ c.count[b]=0; c.built[b]=false; }
+    c.constructSlot=-1;
+    // Edificios iniciales según facción (van al grid para visualización)
+    auto addBld=[&](BuildingType b){
+        c.built[b]=true; c.count[b]++;
+        // Colocar en el primer slot libre (murallas van al perímetro, no al grid)
+        if(b!=BLD_WALLS1&&b!=BLD_WALLS2){
+            for(int s=0;s<16;s++) if(c.grid[s]<0){ c.grid[s]=(int)b; break; }
+        }
+    };
+    if(owner==FACTION_PLAYER){ addBld(BLD_FARM); addBld(BLD_BARRACKS); }
+    if(owner==FACTION_AGGRESSIVE||owner==FACTION_DEFENSIVE){ addBld(BLD_FARM); addBld(BLD_BARRACKS); }
+    if(owner==FACTION_COMMERCIAL){ addBld(BLD_FARM); addBld(BLD_MARKET); }
+}
+
+// v11: fog of war — explora provincias propias + adyacentes + 2 saltos si hay atalaya
+// D1: explored es vector dinámico (redimensiona al nº real de provincias; el
+// array fijo de 32 no cubría Europa = 36 provincias)
+void updateFogOfWar(){
+    int np=(int)g_campaign.provinces.size();
+    if((int)g_campaign.explored.size()!=np) g_campaign.explored.resize(np,false);
+    // Propias siempre exploradas
+    for(int i=0;i<np;i++)
+        if(g_campaign.provinces[i].owner==g_localFaction)
+            g_campaign.explored[i]=true;
+    // 1 salto desde cualquier provincia propia
+    for(int i=0;i<np;i++){
+        if(g_campaign.provinces[i].owner!=g_localFaction) continue;
+        for(int adj:g_campaign.provinces[i].adjacent)
+            if(adj>=0&&adj<np) g_campaign.explored[adj]=true;
+    }
+    // 2 saltos si alguna ciudad propia tiene atalaya
+    bool watch=false;
+    for(int i=0;i<np;i++){
+        Province& p=g_campaign.provinces[i];
+        if(p.owner==g_localFaction&&p.hasCity&&p.city.built[BLD_WATCHTOWER]) watch=true;
+    }
+    if(watch){
+        for(int i=0;i<np;i++){
+            if(g_campaign.provinces[i].owner!=g_localFaction) continue;
+            for(int a1:g_campaign.provinces[i].adjacent){
+                if(a1<0||a1>=np) continue;
+                for(int a2:g_campaign.provinces[a1].adjacent)
+                    if(a2>=0&&a2<np) g_campaign.explored[a2]=true;
+            }
+        }
+    }
+}
+
 int armySoldiers(const std::vector<std::pair<int,int>>& units){
     int s=0;
     for(auto [ti,c]:units) s+=c;
     return s;
+}
+
+// D2: turns de reclutamiento con bonus de Barracks (-1t por copia, min 1 turno)
+int recruitTurnsFor(int province, int baseTurns){
+    if(province<0||province>=(int)g_campaign.provinces.size()) return baseTurns;
+    const Province& p=g_campaign.provinces[province];
+    if(!p.hasCity) return baseTurns;
+    int t=baseTurns-(int)p.city.count[BLD_BARRACKS];
+    if(t<1) t=1;
+    return t;
+}
+
+// D2: veteranía inicial (0..3) = Range + Stable en la ciudad de la provincia
+int cityVeterancy(int province){
+    if(province<0||province>=(int)g_campaign.provinces.size()) return 0;
+    const Province& p=g_campaign.provinces[province];
+    if(!p.hasCity) return 0;
+    int v=(int)p.city.count[BLD_RANGE]+(int)p.city.count[BLD_STABLE];
+    if(v>3) v=3;
+    return v;
 }
 
 bool armyHasKing(const std::vector<std::pair<int,int>>& units){
@@ -119,6 +194,9 @@ void mergePlayerDefenders(int province){
         if(a.province!=province||a.owner!=FACTION_PLAYER) continue;
         if(first<0){ first=i; continue; }
         for(auto& u:a.units) g_campaign.armies[first].units.push_back(u);
+        // D2: la veteranía del ejército resultante es la máxima
+        g_campaign.armies[first].veterancy=
+            std::max(g_campaign.armies[first].veterancy,a.veterancy);
         a.units.clear();
     }
     if(first<0) return;
@@ -141,6 +219,26 @@ int safeRetreatProvince(int from){
         if(g_campaign.provinces[adj].owner==FACTION_PLAYER) return adj;
     }
     return -1;
+}
+
+// v11: ruta marítima — un barco alcanza `to` si es adyacente (desembarque
+// directo), o si existe una provincia costera `mid` adyacente a ambas
+// (navegación de 2 saltos por la costa). `to` no hace falta que sea costera
+// si es adyacente (permite desembarcar en tierra desde el mar).
+bool shipCanReach(int from, int to){
+    const auto& P=g_campaign.provinces;
+    int n=(int)P.size();
+    if(from<0||from>=n||to<0||to>=n||from==to) return false;
+    for(int adj:P[from].adjacent) if(adj==to) return true;
+    // 2 saltos: `from` —mid(costera)— `to`
+    if(P[from].terrain!=TERRAIN_COAST && P[to].terrain!=TERRAIN_COAST) return false;
+    for(int mid:P[from].adjacent){
+        if(mid<0||mid>=n||mid==to) continue;
+        if(P[mid].terrain!=TERRAIN_COAST) continue;
+        for(int adj2:P[mid].adjacent)
+            if(adj2==to) return true;
+    }
+    return false;
 }
 
 // Resta `losses` soldados de los grupos en orden (aprox. de bajas enemigas)
@@ -169,6 +267,10 @@ bool formArmyAt(int province, int faction){
     a.id=g_campaign.nextArmyId++;
     a.owner=fo; // PvP: el ejército pertenece a la facción indicada
     a.province=province;
+    // D2: veteranía de la ciudad si la provincia es de la facción (Range+Stable)
+    if(province>=0&&province<(int)g_campaign.provinces.size()&&
+       g_campaign.provinces[province].owner==fo)
+        a.veterancy=cityVeterancy(province);
     a.units.push_back(resv[gi]);
     resv.erase(resv.begin()+gi);
     // Tropas no-héroe de la reserva se unen al nuevo ejército
@@ -187,6 +289,11 @@ void joinArmyAt(int province, int faction){
     FactionId fo=(faction>=0)?(FactionId)faction:g_localFaction;
     int ai=armyIndexAt(province,fo);
     if(ai<0) return;
+    // D2: al unir tropas en una ciudad propia, la veteranía sube al máximo
+    if(province>=0&&province<(int)g_campaign.provinces.size()&&
+       g_campaign.provinces[province].owner==fo)
+        g_campaign.armies[ai].veterancy=
+            std::max(g_campaign.armies[ai].veterancy,cityVeterancy(province));
     auto& resv=(fo==FACTION_PLAYER)?g_campaign.reserve:g_campaign.clientReserve;
     std::vector<std::pair<int,int>> heroes;
     for(auto& u:resv){
@@ -332,25 +439,7 @@ void generateCampaignMap(int campaignId){
             p.center={tp.nx*(float)sw, tp.ny*(float)sh};
             p.terrain=tp.terrain; p.owner=tp.owner; p.hasCity=tp.hasCity;
         if(tp.hasCity){
-            strncpy(p.city.name,tp.cityName,sizeof(p.city.name)-1); p.city.name[sizeof(p.city.name)-1]='\0';
-            memset(p.city.built,0,sizeof(p.city.built));
-            p.city.constructing=-1;
-            p.city.constructTurns=0;
-            p.city.defBonus=1.0f;
-            // Player starter city has barracks + farm
-            if(tp.owner==FACTION_PLAYER){
-                p.city.built[BLD_FARM]=true;
-                p.city.built[BLD_BARRACKS]=true;
-            }
-            // Enemy cities have some buildings
-            if(tp.owner==FACTION_AGGRESSIVE||tp.owner==FACTION_DEFENSIVE){
-                p.city.built[BLD_FARM]=true;
-                p.city.built[BLD_BARRACKS]=true;
-            }
-            if(tp.owner==FACTION_COMMERCIAL){
-                p.city.built[BLD_FARM]=true;
-                p.city.built[BLD_MARKET]=true;
-            }
+            initCity(p.city,tp.cityName,tp.owner);
         }
         p.army.clear();
         // Add enemy armies
@@ -398,12 +487,7 @@ void generateCampaignMap(int campaignId){
             p.center={tp.nx*(float)sw, tp.ny*(float)sh};
             p.terrain=tp.terrain; p.owner=tp.owner; p.hasCity=tp.hasCity;
             if(tp.hasCity){
-                strncpy(p.city.name,tp.cityName,sizeof(p.city.name)-1); p.city.name[sizeof(p.city.name)-1]='\0';
-                memset(p.city.built,0,sizeof(p.city.built));
-                p.city.constructing=-1; p.city.constructTurns=0; p.city.defBonus=1.0f;
-                if(tp.owner==FACTION_PLAYER){ p.city.built[BLD_FARM]=true; p.city.built[BLD_BARRACKS]=true; }
-                if(tp.owner==FACTION_AGGRESSIVE||tp.owner==FACTION_DEFENSIVE){ p.city.built[BLD_FARM]=true; p.city.built[BLD_BARRACKS]=true; }
-                if(tp.owner==FACTION_COMMERCIAL){ p.city.built[BLD_FARM]=true; p.city.built[BLD_MARKET]=true; }
+                initCity(p.city,tp.cityName,tp.owner);
             }
             p.army.clear();
             if(tp.owner==FACTION_AGGRESSIVE){ p.army.push_back({0,40}); p.army.push_back({1,30}); }
@@ -446,12 +530,7 @@ void generateCampaignMap(int campaignId){
             p.center={tp.nx*(float)sw, tp.ny*(float)sh};
             p.terrain=tp.terrain; p.owner=tp.owner; p.hasCity=tp.hasCity;
             if(tp.hasCity){
-                strncpy(p.city.name,tp.cityName,sizeof(p.city.name)-1); p.city.name[sizeof(p.city.name)-1]='\0';
-                memset(p.city.built,0,sizeof(p.city.built));
-                p.city.constructing=-1; p.city.constructTurns=0; p.city.defBonus=1.0f;
-                if(tp.owner==FACTION_PLAYER){ p.city.built[BLD_FARM]=true; p.city.built[BLD_BARRACKS]=true; }
-                if(tp.owner==FACTION_AGGRESSIVE||tp.owner==FACTION_DEFENSIVE){ p.city.built[BLD_FARM]=true; p.city.built[BLD_BARRACKS]=true; }
-                if(tp.owner==FACTION_COMMERCIAL){ p.city.built[BLD_FARM]=true; p.city.built[BLD_MARKET]=true; }
+                initCity(p.city,tp.cityName,tp.owner);
             }
             p.army.clear();
             if(tp.owner==FACTION_AGGRESSIVE){ p.army.push_back({0,40}); p.army.push_back({1,30}); }
@@ -519,12 +598,8 @@ void generateCampaignMap(int campaignId){
             p.center={tp.nx*(float)sw, tp.ny*(float)sh};
             p.terrain=tp.terrain; p.owner=tp.owner; p.hasCity=tp.hasCity;
             if(tp.hasCity){
-                strncpy(p.city.name,tp.cityName,sizeof(p.city.name)-1); p.city.name[sizeof(p.city.name)-1]='\0';
-                memset(p.city.built,0,sizeof(p.city.built));
-                p.city.constructing=-1; p.city.constructTurns=0; p.city.defBonus=1.0f;
-                if(tp.owner==FACTION_PLAYER){ p.city.built[BLD_FARM]=true; p.city.built[BLD_BARRACKS]=true; }
-                if(tp.owner==FACTION_AGGRESSIVE||tp.owner==FACTION_DEFENSIVE||tp.owner==FACTION_PIRATE){ p.city.built[BLD_FARM]=true; p.city.built[BLD_BARRACKS]=true; }
-                if(tp.owner==FACTION_COMMERCIAL){ p.city.built[BLD_FARM]=true; p.city.built[BLD_MARKET]=true; }
+                initCity(p.city,tp.cityName,tp.owner);
+                if(tp.owner==FACTION_PIRATE){ p.city.built[BLD_FARM]=true; p.city.count[BLD_FARM]++; p.city.built[BLD_BARRACKS]=true; p.city.count[BLD_BARRACKS]++; }
             }
             p.army.clear();
             if(tp.owner==FACTION_AGGRESSIVE){ p.army.push_back({0,40}); p.army.push_back({1,30}); }
@@ -543,6 +618,118 @@ void generateCampaignMap(int campaignId){
             if(dx<=1&&dy<=1){
                 g_campaign.provinces[i].adjacent.push_back(j);
                 g_campaign.provinces[j].adjacent.push_back(i);
+            }
+        }
+    } else if(campaignId==4){
+        // Campaign 4: "Europa" — 36 provincias con silueta realista de Europa.
+        // Posiciones aproximadas de ciudades europeas reales (x=oeste→este,
+        // y=norte→sur). Vecindad: pares manuales + radio-based automático.
+        static const ProvinceTemplate tpls[]{
+            // Ibérica (suroeste)
+            {"Lisboa",     0.070f,0.720f, TERRAIN_COAST,    FACTION_NEUTRAL,   true,  "Lisboa"},
+            {"Madrid",     0.140f,0.680f, TERRAIN_PLAIN,    FACTION_NEUTRAL,   true,  "Madrid"},
+            {"Sevilla",    0.100f,0.780f, TERRAIN_PLAIN,    FACTION_NEUTRAL,   false, ""},
+            {"Barcelona",  0.210f,0.660f, TERRAIN_COAST,    FACTION_NEUTRAL,   true,  "Barcelona"},
+            // Francia (jugador)
+            {"Paris",      0.270f,0.460f, TERRAIN_PLAIN,    FACTION_PLAYER,    true,  "Paris"},
+            {"Lyon",       0.290f,0.580f, TERRAIN_MOUNTAIN, FACTION_PLAYER,    true,  "Lyon"},
+            {"Bordeaux",   0.210f,0.560f, TERRAIN_COAST,    FACTION_PLAYER,    true,  "Bordeaux"},
+            {"Marsella",   0.310f,0.620f, TERRAIN_COAST,    FACTION_PLAYER,    false, ""},
+            // Islas Británicas (como provincia costera unida al continente)
+            {"Londres",    0.220f,0.330f, TERRAIN_PLAIN,    FACTION_NEUTRAL,   true,  "Londres"},
+            {"Edimburgo",  0.200f,0.220f, TERRAIN_FOREST,   FACTION_NEUTRAL,   false, ""},
+            // Países Bajos / Bélgica
+            {"Ámsterdam",  0.320f,0.360f, TERRAIN_COAST,    FACTION_COMMERCIAL,true,  "Ámsterdam"},
+            {"Bruselas",   0.300f,0.400f, TERRAIN_PLAIN,    FACTION_NEUTRAL,   false, ""},
+            // Alemania (agresivo - Iron Pact)
+            {"Berlín",     0.450f,0.340f, TERRAIN_PLAIN,    FACTION_AGGRESSIVE,true,  "Berlín"},
+            {"Fráncfort",  0.380f,0.420f, TERRAIN_FOREST,   FACTION_AGGRESSIVE,true,  "Fráncfort"},
+            {"Múnich",     0.400f,0.520f, TERRAIN_MOUNTAIN, FACTION_AGGRESSIVE,true,  "Múnich"},
+            {"Hamburgo",   0.420f,0.300f, TERRAIN_COAST,    FACTION_NEUTRAL,   false, ""},
+            // Escandinavia (piratas - Vikings)
+            {"Oslo",       0.400f,0.160f, TERRAIN_MOUNTAIN, FACTION_PIRATE,    true,  "Oslo"},
+            {"Estocolmo",  0.500f,0.140f, TERRAIN_FOREST,   FACTION_PIRATE,    true,  "Estocolmo"},
+            {"Copenhague", 0.420f,0.250f, TERRAIN_COAST,    FACTION_PIRATE,    false, ""},
+            {"Bergen",     0.350f,0.120f, TERRAIN_COAST,    FACTION_NEUTRAL,   false, ""},
+            // Polonia
+            {"Varsovia",   0.550f,0.340f, TERRAIN_PLAIN,    FACTION_NEUTRAL,   true,  "Varsovia"},
+            {"Cracovia",   0.540f,0.420f, TERRAIN_MOUNTAIN, FACTION_NEUTRAL,   false, ""},
+            // Austria-Hungría (defensivo - Stone Realm)
+            {"Viena",      0.480f,0.480f, TERRAIN_PLAIN,    FACTION_DEFENSIVE, true,  "Viena"},
+            {"Budapest",   0.530f,0.500f, TERRAIN_PLAIN,    FACTION_DEFENSIVE, true,  "Budapest"},
+            {"Praga",      0.460f,0.420f, TERRAIN_FOREST,   FACTION_NEUTRAL,   false, ""},
+            // Balcanes
+            {"Belgrado",   0.540f,0.560f, TERRAIN_MOUNTAIN, FACTION_NEUTRAL,   true,  "Belgrado"},
+            {"Zagreb",     0.480f,0.540f, TERRAIN_FOREST,   FACTION_NEUTRAL,   false, ""},
+            {"Sofía",      0.600f,0.620f, TERRAIN_MOUNTAIN, FACTION_NEUTRAL,   false, ""},
+            {"Atenas",     0.580f,0.760f, TERRAIN_COAST,    FACTION_NEUTRAL,   true,  "Atenas"},
+            // Italia (comercial - Trade Republic)
+            {"Milán",      0.350f,0.560f, TERRAIN_PLAIN,    FACTION_COMMERCIAL,true,  "Milán"},
+            {"Venecia",    0.400f,0.560f, TERRAIN_COAST,    FACTION_COMMERCIAL,true,  "Venecia"},
+            {"Roma",       0.400f,0.700f, TERRAIN_PLAIN,    FACTION_NEUTRAL,   true,  "Roma"},
+            {"Nápoles",    0.420f,0.760f, TERRAIN_COAST,    FACTION_NEUTRAL,   false, ""},
+            // Europa del Este / Rusia
+            {"Kiev",       0.680f,0.360f, TERRAIN_PLAIN,    FACTION_NEUTRAL,   true,  "Kiev"},
+            {"Moscú",      0.800f,0.240f, TERRAIN_FOREST,   FACTION_NEUTRAL,   true,  "Moscú"},
+            {"San Petersburgo",0.740f,0.140f,TERRAIN_COAST, FACTION_NEUTRAL,   false, ""},
+        };
+        int n=36;
+        for(int i=0;i<n;i++){
+            const ProvinceTemplate& tp=tpls[i];
+            Province p{};
+            strncpy(p.name,tp.name,sizeof(p.name)-1); p.name[sizeof(p.name)-1]='\0';
+            p.nx=tp.nx; p.ny=tp.ny;
+            p.center={tp.nx*(float)sw, tp.ny*(float)sh};
+            p.terrain=tp.terrain; p.owner=tp.owner; p.hasCity=tp.hasCity;
+            if(tp.hasCity) initCity(p.city,tp.cityName,tp.owner);
+            p.army.clear();
+            if(tp.owner==FACTION_AGGRESSIVE){ p.army.push_back({0,40}); p.army.push_back({1,30}); }
+            else if(tp.owner==FACTION_DEFENSIVE){ p.army.push_back({0,50}); p.army.push_back({4,20}); }
+            else if(tp.owner==FACTION_COMMERCIAL){ p.army.push_back({0,30}); }
+            else if(tp.owner==FACTION_PIRATE){ p.army.push_back({0,30}); p.army.push_back({4,20}); }
+            g_campaign.provinces.push_back(p);
+        }
+        // Vecindad: pares manuales de rutas terrestres europeas + automática
+        // por distancia (cualquier par < 0.18 en espacio normalizado es adyacente)
+        static const int adjData[][2]={
+            // Ibérica
+            {0,1},{0,2},{1,2},{1,3},{2,3},
+            // Francia
+            {4,5},{4,6},{4,8},{4,10},{4,11},{5,6},{5,7},{5,14},{6,7},{6,3},
+            // Bélgica/Alemania
+            {10,12},{10,13},{11,13},{12,13},{12,15},{12,24},{13,14},{13,24},
+            {14,22},{14,23},{14,24},{15,12},
+            // Escandinavia
+            {16,17},{16,18},{16,19},{17,18},{17,35},
+            // Polonia
+            {20,12},{20,21},{20,22},{21,22},{21,25},
+            // Austria-Hungría
+            {22,23},{22,24},{22,25},{23,25},{23,26},{24,26},{24,29},{24,30},
+            // Balcanes
+            {25,26},{25,27},{25,28},{26,27},{26,30},{27,28},{27,30},{28,32},
+            // Italia
+            {29,30},{29,31},{30,31},{31,32},
+            // Europa del Este
+            {33,20},{33,34},{34,35},{33,21},
+        };
+        for(auto& pr:g_campaign.provinces) pr.adjacent.clear();
+        for(auto& ad:adjData){
+            if(ad[0]<n&&ad[1]<n){
+                g_campaign.provinces[ad[0]].adjacent.push_back(ad[1]);
+                g_campaign.provinces[ad[1]].adjacent.push_back(ad[0]);
+            }
+        }
+        // Adicional: conectar provincias costeras cercanas (distancia < 0.18)
+        // que no estén ya conectadas (cubre bordes del mapa)
+        for(int i=0;i<n;i++) for(int j=i+1;j<n;j++){
+            float dx=tpls[i].nx-tpls[j].nx, dy=tpls[i].ny-tpls[j].ny;
+            if(dx*dx+dy*dy < 0.18f*0.18f){
+                bool found=false;
+                for(int a:g_campaign.provinces[i].adjacent) if(a==j) found=true;
+                if(!found){
+                    g_campaign.provinces[i].adjacent.push_back(j);
+                    g_campaign.provinces[j].adjacent.push_back(i);
+                }
             }
         }
     }
@@ -670,19 +857,31 @@ bool processTurn(){
         City& c=prov.city;
         for(int b=0;b<BLD_COUNT;b++){
             if(!c.built[b]) continue;
-            dest->gold+=bldGoldYield[b];
-            dest->food+=bldFoodYield[b];
-            dest->wood+=bldWoodYield[b];
-            dest->stone+=bldStoneYield[b];
-            dest->iron+=bldIronYield[b];
+            int n=(int)c.count[b]; if(n<1) n=1; // v11: ingreso x nº de copias
+            dest->gold+=bldGoldYield[b]*(float)n;
+            dest->food+=bldFoodYield[b]*(float)n;
+            dest->wood+=bldWoodYield[b]*(float)n;
+            dest->stone+=bldStoneYield[b]*(float)n;
+            dest->iron+=bldIronYield[b]*(float)n;
         }
         // Advance construction
         if(c.constructing>=0){
             c.constructTurns--;
             if(c.constructTurns<=0){
-                c.built[c.constructing]=true;
-                battleLogAdd(TextFormat("[T%d] %s: %s completed!", g_campaign.turn, prov.name, bldNames[c.constructing]));
+                int bt=c.constructing;
+                c.built[bt]=true;
+                c.count[bt]=(unsigned char)std::min(255,(int)c.count[bt]+1);
+                // v11: colocar en la matriz (murallas van al perímetro, no al grid)
+                if(bt!=BLD_WALLS1&&bt!=BLD_WALLS2){
+                    int slot=c.constructSlot;
+                    if(slot>=0&&slot<16&&c.grid[slot]<0) c.grid[slot]=bt;
+                    else { for(int s=0;s<16;s++) if(c.grid[s]<0){ c.grid[s]=bt; break; } }
+                }
+                if(bt==BLD_WALLS1) c.defBonus=std::max(c.defBonus,1.15f);
+                if(bt==BLD_WALLS2) c.defBonus=std::max(c.defBonus,1.35f);
+                battleLogAdd(TextFormat("[T%d] %s: %s completed!", g_campaign.turn, prov.name, bldNames[bt]));
                 c.constructing=-1;
+                c.constructSlot=-1;
             }
         }
     }
