@@ -1322,3 +1322,33 @@ incidencias reales:
   oro 500 -> 380) sin crash; ESC cancela el modo colocacion.
 - **Tests**: nuevo `build/test_city.ps1` (BUILD -> ESC -> BUILD -> clic en celda
   vacia) + regresion `test_faseJ`, `test_faseD`, `test_faseK`, `test_ranged`.
+
+#### Fix P1: el ejército enemigo derrotado no desaparecía del mapa (2026-10-12)
+
+- **Causa raíz**: la remoción del enemigo vencido estaba partida dentro de
+  `updateDrawBattleResult` (main.cpp). La victoria en **ataque** solo hacía
+  `prov.army.clear()` (guarnición) y nunca borraba los `FieldArmy` enemigos de
+  la provincia capturada; la victoria en **defensa** no tenía ninguna rama (el
+  ejército atacante IA sobrevivía al 100% tras perder el asalto); la ruta
+  legada de guarnición hostil en provincia propia tampoco limpiaba `prov.army`.
+  Además los `armies.erase()` crudos cruzaban `g_preBattle.armyIdx` /
+  `attackerArmyIdx` sin reajustar.
+- **Fix**: la lógica de fin de batalla pasa a `campaign.cpp` en
+  `applyBattleResultCampaign(quickBattle)` — única ruta de aplicación para las
+  tres fuentes de resultado (batalla táctica vía VIEW RESULTS, auto-resolve y
+  quick battle) — con `removeArmyAt(idx)` que mantiene coherentes
+  `selectedArmy` y los índices de `g_preBattle`. Reglas: (A) victoria en ataque
+  = captura + guarnición y ejércitos de campo del dueño previo eliminados
+  (los aliados no se tocan); (B) victoria en defensa = se elimina el ejército
+  atacante (`attackerArmyIdx`, validado por facción) o la guarnición legada si
+  no hubo atacante; (C) derrota en defensa conserva el comportamiento previo
+  (el atacante ocupa con bajas aplicadas y el defensor se retira con
+  `safeRetreatProvince`); (D) loot y supervivientes intactos (idempotentes).
+- **Comportamiento**: al ganar una batalla el ejército/defensor enemigo derrotado
+  desaparece del mapa de campaña en todas las rutas. No se introdujo retirada
+  del enemigo (es trabajo futuro: AAA_ROADMAP 3.5-5). No existen batallas
+  IA-vs-IA (processTurn solo pone como objetivo provincias de FACTION_PLAYER).
+- **Tests**: nuevo `build/test_battleres.ps1` -> `rts_game.exe -battletest`
+  (headless, 23 checks: ataque, defensa, derrota, guarnición legada, quick
+  battle, idempotencia y reajuste de índices). Regresión verde: `test_faseD`,
+  `test_faseJ`, `test_ranged`, `test_city`, `test_faseK`, `test_net`.

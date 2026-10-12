@@ -210,3 +210,23 @@ int  cityVeterancy(int province);
 bool shipCanReach(int from, int to);
 std::vector<std::pair<int,int>> subtractEnemyLosses(
     const std::vector<std::pair<int,int>>& units, int losses); // approx: bajas enemigas
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  POST-BATALLA: resultado -> mapa de campaña (única ruta de fin de batalla)
+// ═══════════════════════════════════════════════════════════════════════════
+// El rey murió en la última batalla (fin de partida al pulsar CONTINUE).
+// Se escribe aquí (applyBattleResultCampaign) y solo se lee en main.cpp.
+extern bool g_kingLost;
+// Aplica g_lastResult al mapa: captura de provincia, REMOCIÓN del ejército
+// enemigo derrotado (ataque y defensa), retirada del defensor, loot y
+// supervivientes. Todas las rutas (batalla táctica, auto-resolve, quick
+// battle) convergen en el result screen que la llama. Idempotente: se invoca
+// cada frame del result screen; devuelve true solo en el frame en que aplicó
+// cambios (para que el caller retransmita el estado en red).
+bool applyBattleResultCampaign(bool quickBattle);
+// Elimina el ejército `idx` manteniendo coherentes selectedArmy y los índices
+// de g_preBattle (un erase cruza los índices y el result screen acabaría
+// escribiendo supervivientes en el ejército equivocado).
+void removeArmyAt(int idx);
+// Self-test headless (-battletest): rutas de fin de batalla -> 0/1
+int runBattleResultTest();

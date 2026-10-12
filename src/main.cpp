@@ -37,7 +37,7 @@ bool      g_fadingOut     = false;
 
 // ───────────────────────────────────────────────────────────────────────────
 bool g_quickBattle = false;
-bool g_kingLost    = false; // Fase J: el rey murió en la última batalla
+// g_kingLost vive en campaign.cpp (lo escribe applyBattleResultCampaign)
 struct QuickBattleSetup {
     std::vector<int> playerCounts;
     std::vector<int> enemyCounts;
@@ -669,6 +669,11 @@ GameState updateDrawBattle(Vector2 mouse,float dt){
 // ═══════════════════════════════════════════════════════════════════════════
 GameState updateDrawBattleResult(Vector2 mouse){
     ClearBackground({8,6,4,255});
+    // Única ruta de fin de batalla: captura, remoción del ejército enemigo
+    // derrotado, retirada del defensor, loot y supervivientes viven en
+    // campaign.cpp (applyBattleResultCampaign) y se aplican aquí una sola vez
+    // (idempotente: solo devuelve true en el frame en que muta el estado).
+    if(applyBattleResultCampaign(g_quickBattle)) netMarkDirty(); // Fase H
     // Gradient overlay — single GPU call instead of per-line loop (2.1)
     Color topCol=g_lastResult.playerWon?Color{0,30,10,255}:Color{30,0,0,255};
     DrawRectangleGradientV(0,0,SCREEN_W,SCREEN_H,topCol,C_BG);
@@ -708,100 +713,13 @@ GameState updateDrawBattleResult(Vector2 mouse){
                  SCREEN_W/2-196,242+i*24,14,C_PARCHMENT);
     }
 
-    // Province change
+    // Province change (solo texto: la aplicacion la hace
+    // applyBattleResultCampaign al entrar en esta pantalla)
     if(g_lastResult.playerWon&&!g_lastResult.isDefense&&g_lastResult.provinceIdx>=0
        &&g_lastResult.provinceIdx<(int)g_campaign.provinces.size()){
         Province& prov=g_campaign.provinces[g_lastResult.provinceIdx];
         DrawText(TextFormat("Province captured: %s",prov.name),
                  SCREEN_W/2-220,240+(int)g_lastResult.survivors.size()*24+20,16,C_GOLD);
-        // Actually update ownership
-        if(prov.owner!=FACTION_PLAYER){
-            prov.owner=FACTION_PLAYER;
-            prov.army.clear(); // guarnición conquistada
-            // Fase J: el ejército ganador ocupa la provincia capturada
-            int ai=g_preBattle.armyIdx;
-            if(ai>=0&&ai<(int)g_campaign.armies.size()){
-                g_campaign.armies[ai].province=g_lastResult.provinceIdx;
-                g_campaign.armies[ai].moved=true;
-                selectArmy(ai);
-            }
-            g_campaign.playerProvince=g_lastResult.provinceIdx;
-        }
-    }
-    // Fase J: derrota en defensa — el atacante ocupa la provincia
-    if(!g_lastResult.playerWon&&g_lastResult.isDefense&&g_preBattle.attackerFaction>=0
-       &&g_lastResult.provinceIdx>=0&&g_lastResult.provinceIdx<(int)g_campaign.provinces.size()){
-        Province& prov=g_campaign.provinces[g_lastResult.provinceIdx];
-        if(prov.owner==FACTION_PLAYER){
-            prov.owner=(FactionId)g_preBattle.attackerFaction;
-            prov.army.clear();
-            // El ejército atacante entra con sus bajas aproximadas
-            int tAi=g_preBattle.attackerArmyIdx;
-            if(tAi>=0&&tAi<(int)g_campaign.armies.size()){
-                g_campaign.armies[tAi].units=subtractEnemyLosses(
-                    g_preBattle.enemyUnits,g_lastResult.enemyLosses);
-                if(g_campaign.armies[tAi].units.empty()){
-                    g_campaign.armies.erase(g_campaign.armies.begin()+tAi);
-                    if(g_campaign.selectedArmy>=tAi) g_campaign.selectedArmy--;
-                } else {
-                    g_campaign.armies[tAi].province=g_lastResult.provinceIdx;
-                    g_campaign.armies[tAi].moved=true;
-                }
-            }
-            // El ejército del jugador se retira a una provincia propia
-            int pi=g_lastResult.provinceIdx;
-            int dAi=g_preBattle.armyIdx;
-            if(dAi>=0&&dAi<(int)g_campaign.armies.size()){
-                g_campaign.armies[dAi].units=g_lastResult.survivors;
-                int rp=safeRetreatProvince(pi);
-                if(rp>=0) g_campaign.armies[dAi].province=rp;
-                else {
-                    g_campaign.armies.erase(g_campaign.armies.begin()+dAi);
-                    if(g_campaign.selectedArmy>=dAi) g_campaign.selectedArmy--;
-                }
-            }
-            int sel=g_campaign.selectedArmy;
-            selectArmy(sel>=0&&sel<(int)g_campaign.armies.size()?sel:-1);
-        }
-    }
-
-    // Apply loot to campaign (0.2: was static bool, now per-result field)
-    if(!g_lastResult.lootApplied){
-        g_campaign.res.gold+=g_lastResult.lootGold;
-        g_lastResult.lootApplied=true;
-        // Update player army with survivors (so dead soldiers don't "resurrect")
-        if(!g_quickBattle){
-            // Fase J: escribir supervivientes en el ejército involucrado
-            int ai=g_preBattle.armyIdx;
-            if(ai>=0&&ai<(int)g_campaign.armies.size()){
-                auto& u=g_campaign.armies[ai].units;
-                u.clear();
-                for(int i=0;i<(int)g_lastResult.survivors.size();i++){
-                    int ti=g_lastResult.survivors[i].first;
-                    int cnt=g_lastResult.survivors[i].second;
-                    if(ti>=0&&ti<unitTypeCount()&&cnt>0) u.push_back({ti,cnt});
-                }
-                if(u.empty()){
-                    g_campaign.armies.erase(g_campaign.armies.begin()+ai);
-                    selectArmy(g_campaign.armies.empty()?-1:
-                               std::min(ai,(int)g_campaign.armies.size()-1));
-                } else {
-                    g_campaign.readyUnits=u;
-                }
-            }
-            g_campaign.playerArmy=g_campaign.readyUnits;
-            // Fase J: si el rey estaba y no sobrevivió → fin de la partida
-            if(g_preBattle.hadKing){
-                bool kingAlive=false;
-                for(auto& s:g_lastResult.survivors)
-                    if(s.first==UNIT_KING&&s.second>0) kingAlive=true;
-                if(!kingAlive) g_kingLost=true;
-            }
-            // Track stats for 3.4
-            if(g_lastResult.playerWon) g_campaign.battlesWon++;
-            else g_campaign.battlesLost++;
-        }
-        netMarkDirty(); // Fase H: batalla resuelta (captura de provincia + loot)
     }
 
     // Fase J: el rey ha caído
@@ -810,7 +728,8 @@ GameState updateDrawBattleResult(Vector2 mouse){
         DrawText(kl,SCREEN_W/2-MeasureText(kl,20)/2,208,20,C_ENEMY_COL);
     }
 
-    // (Survivor list and province capture already shown above; army updated in lootApplied block)
+    // (Captura, remoción del enemigo, retirada, loot y supervivientes ya se
+    //  aplicaron arriba via applyBattleResultCampaign)
 
     // Continue button
     if(drawButton({(float)(SCREEN_W/2-140),(float)(SCREEN_H-80),280,54},"CONTINUE",mouse)){
@@ -3490,6 +3409,8 @@ int main(int argc, char** argv){
             int rc4=runSyncTest(); // Fase H
             return (rc==0&&rc2==0&&rc3==0&&rc4==0)?0:1;
         }
+        // Self-test headless de las rutas de fin de batalla (sin ventana)
+        if(strcmp(argv[i],"-battletest")==0) return runBattleResultTest();
     }
     // Load persistent settings before creating the window (so resolution applies on startup)
     loadSettings();                  // 3.1: load persistent settings

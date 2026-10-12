@@ -1079,6 +1079,378 @@ bool processTurn(){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  POST-BATALLA — resultado -> mapa de campaña (todas las rutas de fin)
+// ═══════════════════════════════════════════════════════════════════════════
+// Las rutas táctica (VIEW RESULTS), auto-resolve y quick battle convergen en
+// updateDrawBattleResult, que llama aquí. Antes de este módulo la remoción del
+// enemigo vencido estaba partida: solo se limpiaba la guarnición al capturar
+// (y solo si la provincia cambiaba de dueño), de modo que los ejércitos de
+// campo enemigos sobrevivían a la derrota y el atacante IA conservaba su
+// ejército intacto al perder el asalto.
+
+// El rey murió en la última batalla (leído por main.cpp al pulsar CONTINUE)
+bool g_kingLost=false;
+
+// Elimina el ejército `idx` y reajusta los índices que lo referencian.
+void removeArmyAt(int idx){
+    if(idx<0||idx>=(int)g_campaign.armies.size()) return;
+    g_campaign.armies.erase(g_campaign.armies.begin()+idx);
+    if(g_campaign.selectedArmy>=idx) g_campaign.selectedArmy--;
+    if(g_preBattle.armyIdx==idx)      g_preBattle.armyIdx=-1;
+    else if(g_preBattle.armyIdx>idx)  g_preBattle.armyIdx--;
+    if(g_preBattle.attackerArmyIdx==idx)     g_preBattle.attackerArmyIdx=-1;
+    else if(g_preBattle.attackerArmyIdx>idx) g_preBattle.attackerArmyIdx--;
+}
+
+bool applyBattleResultCampaign(bool quickBattle){
+    // ── (A) Victoria en ATAQUE: la provincia pasa al jugador ───────────────
+    // Guarnición + ejércitos de campo enemigos en la provincia: derrotados,
+    // desaparecen del mapa (antes solo se limpiaba la guarnición).
+    if(g_lastResult.playerWon&&!g_lastResult.isDefense&&
+       g_lastResult.provinceIdx>=0&&
+       g_lastResult.provinceIdx<(int)g_campaign.provinces.size()){
+        Province& prov=g_campaign.provinces[g_lastResult.provinceIdx];
+        if(prov.owner!=FACTION_PLAYER){
+            FactionId prevOwner=prov.owner; // dueño previo: quién fue vencido
+            prov.owner=FACTION_PLAYER;
+            prov.army.clear(); // guarnición conquistada
+            // Mismo criterio con el que se compiló el enemigo en el pre-battle
+            // (provincia + dueño de la provincia); los aliados no se tocan.
+            for(int k=(int)g_campaign.armies.size()-1;k>=0;k--){
+                const FieldArmy& fa=g_campaign.armies[k];
+                if(fa.province==g_lastResult.provinceIdx&&fa.owner==prevOwner){
+                    battleLogAdd(TextFormat("Enemy army destroyed at %s!",prov.name));
+                    removeArmyAt(k); // reajusta g_preBattle.armyIdx si hace falta
+                }
+            }
+            // Fase J: el ejército ganador ocupa la provincia capturada
+            int ai=g_preBattle.armyIdx;
+            if(ai>=0&&ai<(int)g_campaign.armies.size()){
+                g_campaign.armies[ai].province=g_lastResult.provinceIdx;
+                g_campaign.armies[ai].moved=true;
+                selectArmy(ai);
+            }
+            g_campaign.playerProvince=g_lastResult.provinceIdx;
+        }
+    }
+
+    // ── (B) Victoria en DEFENSA: el asalto fracasó ─────────────────────────
+    // El ejército atacante (IA) fue derrotado y desaparece del mapa. Sin esta
+    // rama el atacante conservaba sus tropas al 100% tras perder la batalla.
+    if(g_lastResult.playerWon&&g_lastResult.isDefense){
+        int tAi=g_preBattle.attackerArmyIdx;
+        if(tAi>=0&&tAi<(int)g_campaign.armies.size()){
+            const FieldArmy& ea=g_campaign.armies[tAi];
+            // Solo si sigue siendo el atacante enemigo (guarda anti-índice
+            // obsoleto): ni ejércitos propios ni de aliados.
+            bool enemy=(g_preBattle.attackerFaction<0||
+                        ea.owner==(FactionId)g_preBattle.attackerFaction)&&
+                       !factionIsPlayerSide(ea.owner);
+            if(enemy){
+                const char* pname="the province";
+                if(g_lastResult.provinceIdx>=0&&
+                   g_lastResult.provinceIdx<(int)g_campaign.provinces.size())
+                    pname=g_campaign.provinces[g_lastResult.provinceIdx].name;
+                battleLogAdd(TextFormat("[T%d] Assault on %s repelled - enemy army destroyed",
+                    g_campaign.turn,pname));
+                removeArmyAt(tAi);
+            }
+        } else if(g_preBattle.attackerFaction<0&&
+                  g_lastResult.provinceIdx>=0&&
+                  g_lastResult.provinceIdx<(int)g_campaign.provinces.size()){
+            // Ruta legada: guarnición hostil en la provincia propia (sin
+            // ejército atacante). La fuerza vencida era esa guarnición.
+            Province& prov=g_campaign.provinces[g_lastResult.provinceIdx];
+            if(factionIsPlayerSide(prov.owner)) prov.army.clear();
+        }
+    }
+
+    // ── (C) Derrota en DEFENSA: el atacante ocupa; el defensor se retira ───
+    if(!g_lastResult.playerWon&&g_lastResult.isDefense&&
+       g_preBattle.attackerFaction>=0&&
+       g_lastResult.provinceIdx>=0&&
+       g_lastResult.provinceIdx<(int)g_campaign.provinces.size()){
+        Province& prov=g_campaign.provinces[g_lastResult.provinceIdx];
+        if(prov.owner==FACTION_PLAYER){
+            prov.owner=(FactionId)g_preBattle.attackerFaction;
+            prov.army.clear();
+            // El ejército atacante entra con sus bajas aproximadas
+            int tAi=g_preBattle.attackerArmyIdx;
+            if(tAi>=0&&tAi<(int)g_campaign.armies.size()){
+                g_campaign.armies[tAi].units=subtractEnemyLosses(
+                    g_preBattle.enemyUnits,g_lastResult.enemyLosses);
+                if(g_campaign.armies[tAi].units.empty()){
+                    removeArmyAt(tAi);
+                } else {
+                    g_campaign.armies[tAi].province=g_lastResult.provinceIdx;
+                    g_campaign.armies[tAi].moved=true;
+                }
+            }
+            // El ejército del jugador se retira a una provincia propia
+            int pi=g_lastResult.provinceIdx;
+            int dAi=g_preBattle.armyIdx;
+            if(dAi>=0&&dAi<(int)g_campaign.armies.size()){
+                g_campaign.armies[dAi].units=g_lastResult.survivors;
+                int rp=safeRetreatProvince(pi);
+                if(rp>=0) g_campaign.armies[dAi].province=rp;
+                else removeArmyAt(dAi);
+            }
+            int sel=g_campaign.selectedArmy;
+            selectArmy(sel>=0&&sel<(int)g_campaign.armies.size()?sel:-1);
+        }
+    }
+
+    // ── (D) Loot + supervivientes del jugador ──────────────────────────────
+    bool changed=false;
+    if(!g_lastResult.lootApplied){
+        g_campaign.res.gold+=g_lastResult.lootGold;
+        g_lastResult.lootApplied=true;
+        changed=true;
+        // Update player army with survivors (so dead soldiers don't "resurrect")
+        if(!quickBattle){
+            // Fase J: escribir supervivientes en el ejército involucrado
+            int ai=g_preBattle.armyIdx;
+            if(ai>=0&&ai<(int)g_campaign.armies.size()){
+                auto& u=g_campaign.armies[ai].units;
+                u.clear();
+                for(int i=0;i<(int)g_lastResult.survivors.size();i++){
+                    int ti=g_lastResult.survivors[i].first;
+                    int cnt=g_lastResult.survivors[i].second;
+                    if(ti>=0&&ti<unitTypeCount()&&cnt>0) u.push_back({ti,cnt});
+                }
+                if(u.empty()){
+                    removeArmyAt(ai);
+                    selectArmy(g_campaign.armies.empty()?-1:
+                               std::min(ai,(int)g_campaign.armies.size()-1));
+                } else {
+                    g_campaign.readyUnits=u;
+                }
+            }
+            g_campaign.playerArmy=g_campaign.readyUnits;
+            // Fase J: si el rey estaba y no sobrevivió → fin de la partida
+            if(g_preBattle.hadKing){
+                bool kingAlive=false;
+                for(auto& s:g_lastResult.survivors)
+                    if(s.first==UNIT_KING&&s.second>0) kingAlive=true;
+                if(!kingAlive) g_kingLost=true;
+            }
+            // Track stats for 3.4
+            if(g_lastResult.playerWon) g_campaign.battlesWon++;
+            else g_campaign.battlesLost++;
+        }
+    }
+    return changed;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+//  SELF-TEST HEADLESS (-battletest): rutas de fin de batalla -> 0/1
+//  Sin raylib ni ventana: solo estado de campaña. Las bajas/type data se
+//  siembran a mano porque initBuiltinTypes() carga texturas (requiere GL).
+// ───────────────────────────────────────────────────────────────────────────
+int runBattleResultTest(){
+    int fails=0;
+    auto check=[&](const char* name,bool ok){
+        printf("%s %s\n",ok?"PASS":"FAIL",name);
+        if(!ok) fails++;
+    };
+    g_unitTypes.clear();
+    for(int i=0;i<3;i++){
+        UnitTypeDef t{};
+        snprintf(t.name,sizeof t.name,"Test Unit %d",i);
+        t.soldierCount=60;
+        g_unitTypes.push_back(t);
+    }
+    auto mkProv=[](const char* name,FactionId owner)->Province{
+        Province p{};
+        snprintf(p.name,sizeof p.name,"%s",name);
+        p.terrain=TERRAIN_PLAIN; p.owner=owner; p.hasCity=false;
+        p.city.constructing=-1; p.city.constructTurns=0; p.city.constructSlot=-1;
+        for(int i=0;i<16;i++) p.city.grid[i]=-1;
+        return p;
+    };
+    auto reset=[&](){
+        g_campaign=CampaignState{};
+        g_preBattle=PreBattleState{};
+        g_lastResult=BattleResult{};
+        g_localFaction=FACTION_PLAYER;
+        g_kingLost=false;
+        g_campaign.res.gold=1000.f;
+    };
+    auto addArmy=[&](FactionId own,int prov,
+                     const std::vector<std::pair<int,int>>& u)->int{
+        FieldArmy a; a.id=g_campaign.nextArmyId++;
+        a.owner=own; a.province=prov; a.units=u;
+        g_campaign.armies.push_back(a);
+        return (int)g_campaign.armies.size()-1;
+    };
+
+    // ── A) Victoria en ATAQUE: captura + enemigo (guarnición y campo) fuera
+    {
+        reset();
+        Province p0=mkProv("Home",FACTION_PLAYER);
+        Province p1=mkProv("Enemy Town",FACTION_AGGRESSIVE);
+        Province p2=mkProv("Back",FACTION_PLAYER);
+        p0.adjacent={1,2}; p1.adjacent={0}; p2.adjacent={0};
+        g_campaign.provinces={p0,p1,p2};
+        g_campaign.provinces[1].army={{0,40}};          // guarnición enemiga
+        int pi=addArmy(FACTION_PLAYER,0,{{0,60}});      // atacante (jugador)
+        addArmy(FACTION_AGGRESSIVE,1,{{1,30}});         // defensor de campo
+        g_campaign.allied[FACTION_DEFENSIVE]=true;
+        addArmy(FACTION_DEFENSIVE,1,{{0,20}});          // aliado en la provincia
+        g_preBattle.provinceIdx=1; g_preBattle.isDefense=false;
+        g_preBattle.armyIdx=pi; g_preBattle.attackerArmyIdx=-1;
+        g_preBattle.attackerFaction=-1;
+        g_preBattle.enemyUnits={{0,40},{1,30}};
+        g_lastResult.playerWon=true; g_lastResult.isDefense=false;
+        g_lastResult.provinceIdx=1; g_lastResult.survivors={{0,50}};
+        g_lastResult.lootGold=60.f; g_lastResult.lootApplied=false;
+        g_lastResult.playerLosses=10; g_lastResult.enemyLosses=70;
+        bool changed=applyBattleResultCampaign(false);
+        check("A1 attack: province captured",
+              g_campaign.provinces[1].owner==FACTION_PLAYER);
+        check("A2 attack: garrison cleared",
+              g_campaign.provinces[1].army.empty());
+        check("A3 attack: enemy field army destroyed",
+              armyIndexAt(1,FACTION_AGGRESSIVE)<0);
+        check("A4 attack: allied army kept",
+              armyIndexAt(1,FACTION_DEFENSIVE)>=0);
+        check("A5 attack: winner occupies with survivors",
+              pi<(int)g_campaign.armies.size()&&
+              g_campaign.armies[pi].province==1&&
+              g_campaign.armies[pi].units.size()==1&&
+              g_campaign.armies[pi].units[0]==std::make_pair(0,50));
+        check("A6 attack: loot + battle stat",
+              changed&&g_campaign.res.gold==1060.f&&g_campaign.battlesWon==1);
+        bool again=applyBattleResultCampaign(false);
+        check("A7 attack: idempotent (no double loot)",
+              !again&&g_campaign.res.gold==1060.f&&g_campaign.battlesWon==1);
+    }
+
+    // ── B) Victoria en DEFENSA: el atacante IA desaparece (índices reajustados)
+    {
+        reset();
+        Province p0=mkProv("Home",FACTION_PLAYER);
+        Province p1=mkProv("Border",FACTION_AGGRESSIVE);
+        p0.adjacent={1}; p1.adjacent={0};
+        g_campaign.provinces={p0,p1};
+        int att=addArmy(FACTION_AGGRESSIVE,1,{{1,40}}); // índice 0 (IA)
+        int def=addArmy(FACTION_PLAYER,0,{{0,50}});      // índice 1 (defensor)
+        addArmy(FACTION_PLAYER,0,{{1,40}});              // índice 2 (otro propio)
+        g_campaign.selectedArmy=2;
+        g_preBattle.provinceIdx=0; g_preBattle.isDefense=true;
+        g_preBattle.attackerFaction=FACTION_AGGRESSIVE;
+        g_preBattle.attackerArmyIdx=att; g_preBattle.armyIdx=def;
+        g_preBattle.enemyUnits={{1,40}};
+        g_lastResult.playerWon=true; g_lastResult.isDefense=true;
+        g_lastResult.provinceIdx=0; g_lastResult.survivors={{0,45}};
+        g_lastResult.lootGold=0.f; g_lastResult.lootApplied=false;
+        applyBattleResultCampaign(false);
+        check("B1 defense: attacker army destroyed",
+              armyIndexAt(1,FACTION_AGGRESSIVE)<0&&
+              (int)g_campaign.armies.size()==2);
+        check("B2 defense: survivors land on the defender (indices)",
+              g_preBattle.armyIdx==0&&
+              g_campaign.armies[0].units.size()==1&&
+              g_campaign.armies[0].units[0]==std::make_pair(0,45));
+        check("B3 defense: other player army untouched",
+              g_campaign.armies[1].units.size()==1&&
+              g_campaign.armies[1].units[0]==std::make_pair(1,40));
+        check("B4 defense: selectedArmy shifted with erase",
+              g_campaign.selectedArmy==1);
+        check("B5 defense: province still ours",
+              g_campaign.provinces[0].owner==FACTION_PLAYER);
+        check("B6 defense: no loot on defense win",
+              g_campaign.res.gold==1000.f&&g_campaign.battlesWon==1);
+    }
+
+    // ── C) Derrota en DEFENSA (regresión): el atacante ocupa y el defensor huye
+    {
+        reset();
+        Province p0=mkProv("Home",FACTION_PLAYER);
+        Province p1=mkProv("Refuge",FACTION_PLAYER);
+        Province p2=mkProv("Enemy Land",FACTION_AGGRESSIVE);
+        p0.adjacent={1,2}; p1.adjacent={0}; p2.adjacent={0};
+        g_campaign.provinces={p0,p1,p2};
+        g_campaign.provinces[0].army={{4,10}};           // guarnición propia
+        int att=addArmy(FACTION_AGGRESSIVE,2,{{1,40}});
+        int def=addArmy(FACTION_PLAYER,0,{{0,50}});
+        int oth=addArmy(FACTION_PLAYER,1,{{0,30}});
+        g_preBattle.provinceIdx=0; g_preBattle.isDefense=true;
+        g_preBattle.attackerFaction=FACTION_AGGRESSIVE;
+        g_preBattle.attackerArmyIdx=att; g_preBattle.armyIdx=def;
+        g_preBattle.enemyUnits={{1,40}};
+        g_lastResult.playerWon=false; g_lastResult.isDefense=true;
+        g_lastResult.provinceIdx=0; g_lastResult.survivors={{0,15}};
+        g_lastResult.enemyLosses=15; g_lastResult.lootGold=0.f;
+        g_lastResult.lootApplied=false;
+        applyBattleResultCampaign(false);
+        check("C1 defeat: province taken by attacker",
+              g_campaign.provinces[0].owner==FACTION_AGGRESSIVE);
+        check("C2 defeat: attacker occupies with losses applied",
+              g_campaign.armies[att].province==0&&
+              g_campaign.armies[att].units.size()==1&&
+              g_campaign.armies[att].units[0]==std::make_pair(1,25));
+        check("C3 defeat: defender retreats with survivors",
+              g_campaign.armies[def].province==1&&
+              g_campaign.armies[def].units.size()==1&&
+              g_campaign.armies[def].units[0]==std::make_pair(0,15));
+        check("C4 defeat: garrison cleared", g_campaign.provinces[0].army.empty());
+        check("C5 defeat: other player army untouched",
+              g_campaign.armies[oth].province==1&&
+              g_campaign.armies[oth].units.size()==1&&
+              g_campaign.armies[oth].units[0]==std::make_pair(0,30));
+    }
+
+    // ── D) Victoria en DEFENSA vs guarnición hostil (ruta legada, sin atacante)
+    {
+        reset();
+        Province p0=mkProv("Home",FACTION_PLAYER);
+        Province p1=mkProv("Refuge",FACTION_PLAYER);
+        p0.adjacent={1}; p1.adjacent={0};
+        g_campaign.provinces={p0,p1};
+        g_campaign.provinces[0].army={{0,30}};           // guarnición hostil
+        int def=addArmy(FACTION_PLAYER,0,{{0,50}});
+        g_preBattle.provinceIdx=0; g_preBattle.isDefense=true;
+        g_preBattle.attackerFaction=-1; g_preBattle.attackerArmyIdx=-1;
+        g_preBattle.armyIdx=def; g_preBattle.enemyUnits={{0,30}};
+        g_lastResult.playerWon=true; g_lastResult.isDefense=true;
+        g_lastResult.provinceIdx=0; g_lastResult.survivors={{0,40}};
+        g_lastResult.lootGold=0.f; g_lastResult.lootApplied=false;
+        applyBattleResultCampaign(false);
+        check("D1 legacy: hostile garrison cleared on defense win",
+              g_campaign.provinces[0].army.empty());
+        check("D2 legacy: defender keeps survivors",
+              (int)g_campaign.armies.size()==1&&
+              g_campaign.armies[0].units.size()==1&&
+              g_campaign.armies[0].units[0]==std::make_pair(0,40));
+    }
+
+    // ── E) Quick battle (provinceIdx=-1): no toca la campaña
+    {
+        reset();
+        Province p0=mkProv("Home",FACTION_PLAYER);
+        g_campaign.provinces={p0};
+        int def=addArmy(FACTION_PLAYER,0,{{0,50}});
+        g_preBattle.armyIdx=def;
+        g_lastResult.playerWon=true; g_lastResult.isDefense=false;
+        g_lastResult.provinceIdx=-1; g_lastResult.survivors={{0,40}};
+        g_lastResult.lootGold=50.f; g_lastResult.lootApplied=false;
+        applyBattleResultCampaign(true);
+        check("E1 quick: no capture (provinceIdx=-1)",
+              g_campaign.provinces[0].owner==FACTION_PLAYER);
+        check("E2 quick: army untouched (no survivors write)",
+              (int)g_campaign.armies.size()==1&&
+              g_campaign.armies[0].units.size()==1&&
+              g_campaign.armies[0].units[0]==std::make_pair(0,50));
+        check("E3 quick: no king/loss flags", !g_kingLost);
+    }
+
+    if(fails==0){ printf("BATTERESULT PASS\n"); return 0; }
+    printf("BATTERESULT FAIL (%d)\n",fails);
+    return 1;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 
 // (:690, :692-693) — Resource trading (externs en campaign.h)
 const float TRADE_RATES[5]={1.f, 1.2f, 1.3f, 1.5f, 0.8f}; // gold, food, wood, stone, iron
