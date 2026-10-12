@@ -1405,3 +1405,54 @@ Defectos P1/P2/P3 confirmados por QA sobre el fix `514829e` (5 fixes en
   corregido un `match` con typo ("retreats"). Regresion verde:
   `test_faseD`, `test_faseJ`, `test_faseK`, `test_city`, `test_net`,
   `test_ranged`.
+
+#### Fix QA2: PvP bidireccional, armyMoveIdx en erase y hardening NET_CMD_ATTACK (2026-10-12)
+
+Defectos P2/P3 confirmados por QA sobre `db20de7` (2 commits tematicos):
+
+- **NEW-QA2-01 (P2, tratado como P1) - PvP unidireccional: el cliente no
+  podia atacar al host**: el unico sendero de `NET_CMD_ATTACK` (click de
+  ataque en `main.cpp`) estaba tras `!factionIsPlayerSide(p.owner)` y
+  `factionIsPlayerSide(FACTION_PLAYER)` devuelve `true` SIEMPRE
+  (`campaign.cpp`), de modo que en PvP las provincias del host nunca eran
+  objetivos del cliente. **Fix**: nueva relacion de hostilidad
+  `isHostileTo(actor,target)` (`campaign.h/.cpp`) = facciones distintas y
+  no en el mismo bando (bando local = `FACTION_PLAYER` + aliados militares
+  de la Fase I). En PvP `clientFaction` y `FACTION_PLAYER` no comparten
+  bando => hostilidad en AMBAS direcciones, salvo alianza militar explicita
+  con la faccion del cliente (`allied[clientFaction]`). El cliente no hereda
+  las guerras del host: los aliados militares del host siguen sin ser
+  objetivos del cliente (comportamiento previo). Se usa en el gate de odds,
+  en el gate de ataque (ambos `main.cpp`) y en la validacion de
+  `NET_CMD_ATTACK` en el host (mismo criterio en los dos lados). Co-op y
+  single-player quedan identicos: para `actor==FACTION_PLAYER` la funcion
+  equivale exactamente a `!factionIsPlayerSide(target)` y en co-op ambos
+  jugadores son `FACTION_PLAYER` => `actor==target` => no hostil. La
+  conquista/loot/`playerProvince`/`selectArmy` del vencedor (fix 24e4885)
+  no se tocaron: siguen cubiertos por H1-H9/I1-I5.
+- **NEW-QA2-02 (P3) - `armies.erase` crudos dejaban `armyMoveIdx`
+  obsoleto**: 4 sitios - `disbandArmy` (`campaign.cpp`), modal MERGE,
+  desembarque y RETREAT (`main.cpp`). **Fix**: los 4 pasan por
+  `removeArmyAt`, que ya reajusta `selectedArmy`, `g_preBattle.armyIdx`,
+  `attackerArmyIdx` y `armyMoveIdx`.
+- **OBS-QA2-04 (P3) - `NET_CMD_ATTACK` indexaba `provinces[from]` sin
+  validar `from`**: `from=armies[mi].province` es un campo que el
+  remitente no controla (si `to` se validaba y `from` no). **Fix**:
+  bounds-check de `from` antes de la rama de adyacencia y rechazo si
+  `!isHostileTo(cf,p.owner)` (ademas del `break` por faccion propia).
+- **Tests**: `runBattleResultTest` pasa de 47 a 60 checks - se anade J
+  (hostilidad: SP, aliados, co-op no hostil, PvP bidireccional J5/J6, sin
+  autohostilidad, alianza explicita que la anula y aliado del host fuera de
+  alcance del cliente) y F4-F7 (`disbandArmy` reajusta `armyMoveIdx` en los
+  3 casos de indice + tropas de vuelta a la reserva). `build/test_battleres.ps1`
+  ampliado a 30 comprobaciones, con piso de 60 checks para que el self-test no
+  encogerse en silencio. Regresion verde sin reintentos: `test_faseD`,
+  `test_faseJ`, `test_faseK`, `test_city`, `test_net`, `test_h_sync`,
+  `test_g_lobby`, `test_faseI`, `test_ranged`.
+- **Observaciones fuera de alcance (para QA/diseno)**: (1) en `landFromShip`
+  (`main.cpp`), si el barco vaciado no era el ultimo ejercito del vector,
+  `landIdx--` deja `selectArmy` apuntando al ejercito anterior al
+  desembarcado (preexistente); (2) un ataque PERDIDO no pone `moved=true`
+  (solo lo hace la captura en la rama A de `applyBattleResultCampaign`), asi
+  que el ejercito superviviente puede volver a atacar el mismo turno - vale
+  igual para host y cliente (preexistente).

@@ -339,7 +339,10 @@ void disbandArmy(int idx){
     if(idx<0||idx>=(int)g_campaign.armies.size()) return;
     auto& resv=localReserve(); // PvP: vuelve a la reserva de su facción
     for(auto& u:g_campaign.armies[idx].units) resv.push_back(u);
-    g_campaign.armies.erase(g_campaign.armies.begin()+idx);
+    // NEW-QA2-02: pasar por removeArmyAt (y no un erase crudo) para no dejar
+    // armyMoveIdx apuntando a otro ejercito si hay una animacion en curso;
+    // tambien reajusta selectedArmy y los indices de g_preBattle.
+    removeArmyAt(idx);
     int nxt=(int)g_campaign.armies.size();
     selectArmy(nxt==0?-1:std::min(idx,nxt-1));
 }
@@ -1552,6 +1555,34 @@ int runBattleResultTest(){
         removeArmyAt(2); // idx > armyMoveIdx
         check("F3 removeArmyAt: armyMoveIdx below idx unchanged",
               g_campaign.armyMoveIdx==0&&(int)g_campaign.armies.size()==2);
+    }
+
+    // ── F4-F7) disbandArmy pasa por removeArmyAt (NEW-QA2-02): el erase
+    // crudo del disband dejaba armyMoveIdx apuntando a otro ejercito
+    {
+        reset();
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        g_campaign.armyMoveIdx=2;
+        disbandArmy(0); // idx < armyMoveIdx
+        check("F4 disbandArmy: armyMoveIdx decremented",
+              g_campaign.armyMoveIdx==1&&(int)g_campaign.armies.size()==2);
+        g_campaign.armyMoveIdx=1;
+        disbandArmy(1); // idx == armyMoveIdx
+        check("F5 disbandArmy: armyMoveIdx reset when its army dies",
+              g_campaign.armyMoveIdx==-1&&(int)g_campaign.armies.size()==1);
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        g_campaign.armyMoveIdx=0;
+        disbandArmy(2); // idx > armyMoveIdx
+        check("F6 disbandArmy: armyMoveIdx below idx unchanged",
+              g_campaign.armyMoveIdx==0&&(int)g_campaign.armies.size()==2);
+        // Las reservas reciben las tropas y la seleccion sigue valida
+        check("F7 disbandArmy: troops back to reserve, selection valid",
+              armySoldiers(g_campaign.reserve)==30&&
+              (g_campaign.selectedArmy<0||
+               g_campaign.selectedArmy<(int)g_campaign.armies.size()));
     }
 
     // ── G) processTurn: el atacante IA se reindexa tras fusionar defensores

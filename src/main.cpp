@@ -176,9 +176,15 @@ static void netHostApplyCmd(const NetCmd& c){
         Province& p=g_campaign.provinces[to];
         // no atacar a la propia facción (en PvP el otro jugador es enemigo)
         if(p.owner==(FactionId)cf) break;
-        // adyacencia: provincia del ejército -> objetivo
+        // NEW-QA2-01/OBS-QA2-04: misma regla de hostilidad que el gate local
+        // (el cliente no puede forzar un ataque a un aliado ni a su propia
+        // faccion) y bounds-check de la provincia de ORIGEN: `from` sale de
+        // armies[mi].province, un campo que el remitente no controla, y hasta
+        // ahora se usaba para indexar provinces[] sin validar.
+        if(!isHostileTo((FactionId)cf,(FactionId)p.owner)) break;
         int from=g_campaign.armies[mi].province;
-        bool adj=false; for(int a:g_campaign.provinces[from].adjacent) if(a==to) adj=true;
+        if(from<0||from>=(int)g_campaign.provinces.size()) break;
+        bool adj=false; for(int a:g_campaign.provinces[from].adjacent) if(a==to){ adj=true; break; }
         if(!adj) break;
         // QA4-03: NO selectArmy(mi). mi es un ejército de la facción del
         // remitente y selectArmy solo admite ejércitos de g_localFaction
@@ -927,8 +933,9 @@ GameState updateDrawPreBattle(Vector2 mouse){
                 int rp=safeRetreatProvince(pi);
                 if(rp>=0) g_campaign.armies[dAi].province=rp;
                 else {
-                    g_campaign.armies.erase(g_campaign.armies.begin()+dAi);
-                    if(g_campaign.selectedArmy>=dAi) g_campaign.selectedArmy--;
+                    // NEW-QA2-02: removeArmyAt reajusta armyMoveIdx (y los
+                    // indices de g_preBattle) ademas de selectedArmy
+                    removeArmyAt(dAi);
                 }
             }
             int sel=g_campaign.selectedArmy;
@@ -1577,10 +1584,10 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                 // D2: veteranía máxima al fusionar
                 A.veterancy=std::max(A.veterancy,B.veterancy);
                 B.units.clear();
-                // Eliminar B (índice mayor)
+                // Eliminar B (índice mayor). NEW-QA2-02: removeArmyAt en vez
+                // de erase crudo (ajusta armyMoveIdx + g_preBattle)
                 int deadIdx=g_mergeB;
-                g_campaign.armies.erase(g_campaign.armies.begin()+deadIdx);
-                if(g_campaign.selectedArmy>=deadIdx) g_campaign.selectedArmy--;
+                removeArmyAt(deadIdx);
                 selectArmy(g_campaign.selectedArmy);
                 netMarkDirty();
                 g_mergeOpen=false;
@@ -1631,7 +1638,9 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                 land.veterancy=shipVet; // D2: la veteranía viaja con las tropas
                 land.units=take;
                 // Vaciar el barco ANTES de push_back (evita realocar con ref vivas)
-                if(shipEmpty) g_campaign.armies.erase(g_campaign.armies.begin()+ai);
+                // NEW-QA2-02: removeArmyAt en vez de erase crudo (ajusta
+                // armyMoveIdx, selectedArmy y g_preBattle)
+                if(shipEmpty) removeArmyAt(ai);
                 g_campaign.armies.push_back(land);
                 int landIdx=(int)g_campaign.armies.size()-1;
                 if(shipEmpty&&landIdx>ai) landIdx--;
