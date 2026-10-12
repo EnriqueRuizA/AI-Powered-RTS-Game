@@ -172,6 +172,7 @@ static void netHostApplyCmd(const NetCmd& c){
         if(mi<0||mi>=(int)g_campaign.armies.size()) break;
         if(g_campaign.armies[mi].owner!=(FactionId)cf) break;
         if(g_campaign.armies[mi].moved) break; // ya movido este turno
+        if(g_campaign.armies[mi].units.empty()) break; // QA4-03: nada que desplegar
         Province& p=g_campaign.provinces[to];
         // no atacar a la propia facción (en PvP el otro jugador es enemigo)
         if(p.owner==(FactionId)cf) break;
@@ -179,7 +180,12 @@ static void netHostApplyCmd(const NetCmd& c){
         int from=g_campaign.armies[mi].province;
         bool adj=false; for(int a:g_campaign.provinces[from].adjacent) if(a==to) adj=true;
         if(!adj) break;
-        selectArmy(mi); // readyUnits = vista del ejército atacante
+        // QA4-03: NO selectArmy(mi). mi es un ejército de la facción del
+        // remitente y selectArmy solo admite ejércitos de g_localFaction
+        // (host), lo que hacía que la batalla se librara con tropas del host
+        // y que los supervivientes aterrizaran en el ejército del cliente.
+        // La vista de despliegue sale directamente del ejército remoto.
+        g_campaign.readyUnits=g_campaign.armies[mi].units;
         // unidades enemigas = guarnición + ejércitos de campo de la facción
         std::vector<std::pair<int,int>> eu=p.army;
         for(auto& fa:g_campaign.armies)
@@ -189,9 +195,11 @@ static void netHostApplyCmd(const NetCmd& c){
         g_preBattle.isDefense=false;
         g_preBattle.fogOfWar=(p.owner!=FACTION_NEUTRAL);
         g_preBattle.estimatedEnemyStrength=armySoldiers(eu)+(int)((frandMT()-0.5f)*20);
-        g_preBattle.attackerFaction=-1;
+        // QA4-01: el vencedor (provincia + loot) es la facción del atacante,
+        // no FACTION_PLAYER. En co-op cf es FACTION_PLAYER (sin cambio).
+        g_preBattle.attackerFaction=cf;
         g_preBattle.attackerArmyIdx=-1;
-        g_preBattle.armyIdx=mi;
+        g_preBattle.armyIdx=mi; // supervivientes -> armies[mi]
         g_preBattle.hadKing=armyHasKing(g_campaign.armies[mi].units);
         g_preBattle.enemyUnits=eu;
         g_preBattle.include.clear();

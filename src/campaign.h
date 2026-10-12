@@ -127,9 +127,11 @@ struct PreBattleState {
     int  estimatedEnemyStrength;
     // Fase J
     std::vector<std::pair<int,int>> enemyUnits; // snapshot: guarnición o ejército atacante
-    int  attackerFaction=-1; // facción atacante en defensa (-1 si el jugador ataca)
+    int  attackerFaction=-1; // facción atacante (defensa: IA; PvP: facción del
+                             // cliente). -1 = ataque del host => FACTION_PLAYER
     int  attackerArmyIdx=-1; // ejército IA atacante (-1 si no)
-    int  armyIdx=-1;         // ejército del jugador involucrado (-1 si no)
+    int  armyIdx=-1;         // ejército del bando local involucrado (-1 si no;
+                             // en un ataque remoto, el ejército del cliente)
     bool hadKing=false;      // el rey estaba en el ejército antes de la batalla
 };
 

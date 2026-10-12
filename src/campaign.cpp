@@ -1120,34 +1120,47 @@ void removeArmyAt(int idx){
 }
 
 bool applyBattleResultCampaign(bool quickBattle){
-    // ── (A) Victoria en ATAQUE: la provincia pasa al jugador ───────────────
-    // Guarnición + ejércitos de campo enemigos en la provincia: derrotados,
+    // (QA4-01) El vencedor es la faccion ATACANTE (g_preBattle.attackerFaction);
+    // -1 (guarnicion legada o ataque del host) equivale a FACTION_PLAYER. Sin
+    // esto una victoria del cliente en PvP daba la provincia al host.
+    FactionId winner=(g_preBattle.attackerFaction>=0)?
+                     (FactionId)g_preBattle.attackerFaction:FACTION_PLAYER;
+    // ── (A) Victoria en ATAQUE: la provincia pasa al vencedor ──────────────
+    // Guarnición + ejércitos de campo hostiles en la provincia: derrotados,
     // desaparecen del mapa (antes solo se limpiaba la guarnición).
     if(g_lastResult.playerWon&&!g_lastResult.isDefense&&
        g_lastResult.provinceIdx>=0&&
        g_lastResult.provinceIdx<(int)g_campaign.provinces.size()){
         Province& prov=g_campaign.provinces[g_lastResult.provinceIdx];
-        if(prov.owner!=FACTION_PLAYER){
+        if(prov.owner!=winner){
             FactionId prevOwner=prov.owner; // dueño previo: quién fue vencido
-            prov.owner=FACTION_PLAYER;
+            prov.owner=winner;
             prov.army.clear(); // guarnición conquistada
-            // Mismo criterio con el que se compiló el enemigo en el pre-battle
-            // (provincia + dueño de la provincia); los aliados no se tocan.
+            // (QA1-03) Tras la captura solo quedan ejercitos del vencedor y de
+            // su bando: caen los del dueño previo (perdedor) y los de las
+            // facciones hostiles (terceras no aliadas); los aliados no se tocan.
             for(int k=(int)g_campaign.armies.size()-1;k>=0;k--){
                 const FieldArmy& fa=g_campaign.armies[k];
-                if(fa.province==g_lastResult.provinceIdx&&fa.owner==prevOwner){
-                    battleLogAdd(TextFormat("Enemy army destroyed at %s!",prov.name));
-                    removeArmyAt(k); // reajusta g_preBattle/armyMoveIdx si hace falta
-                }
+                if(fa.province!=g_lastResult.provinceIdx) continue;
+                bool hostile=(fa.owner==prevOwner)||
+                             (fa.owner!=winner&&!factionIsPlayerSide(fa.owner));
+                if(!hostile) continue;
+                battleLogAdd(TextFormat("Enemy army destroyed at %s!",prov.name));
+                removeArmyAt(k); // reajusta g_preBattle/armyMoveIdx si hace falta
             }
             // Fase J: el ejército ganador ocupa la provincia capturada
             int ai=g_preBattle.armyIdx;
             if(ai>=0&&ai<(int)g_campaign.armies.size()){
                 g_campaign.armies[ai].province=g_lastResult.provinceIdx;
                 g_campaign.armies[ai].moved=true;
-                selectArmy(ai);
+                // Solo seleccionar ejercitos de la faccion local (en PvP el
+                // host no debe secuestrar la vista con el ejercito del cliente)
+                if(g_campaign.armies[ai].owner==g_localFaction) selectArmy(ai);
             }
-            g_campaign.playerProvince=g_lastResult.provinceIdx;
+            // (QA4-01) playerProvince es la vista del host: solo se mueve si
+            // el vencedor es FACTION_PLAYER (en PvP la conquista es del cliente)
+            if(winner==FACTION_PLAYER)
+                g_campaign.playerProvince=g_lastResult.provinceIdx;
         }
     }
 
@@ -1220,7 +1233,14 @@ bool applyBattleResultCampaign(bool quickBattle){
     // ── (D) Loot + supervivientes del jugador ──────────────────────────────
     bool changed=false;
     if(!g_lastResult.lootApplied){
-        g_campaign.res.gold+=g_lastResult.lootGold;
+        // (QA4-01) El loot es de la faccion vencedora: en PvP una victoria
+        // del cliente ingresa a clientRes, no a los recursos del host. La
+        // quick battle no toca la campaña (provinceIdx=-1) y siempre al host.
+        bool lootToClient=g_campaign.pvpMode&&
+                          g_lastResult.provinceIdx>=0&&
+                          winner==g_campaign.clientFaction;
+        Resources& lootRes=lootToClient?g_campaign.clientRes:g_campaign.res;
+        lootRes.gold+=g_lastResult.lootGold;
         g_lastResult.lootApplied=true;
         changed=true;
         // Update player army with survivors (so dead soldiers don't "resurrect")
@@ -1241,6 +1261,18 @@ bool applyBattleResultCampaign(bool quickBattle){
                                std::min(ai,(int)g_campaign.armies.size()-1));
                 } else {
                     g_campaign.readyUnits=u;
+                    // (QA4-03) Batalla remota (PvP): el ejercito superviviente
+                    // es de otra faccion; readyUnits es la vista del ejercito
+                    // local y no debe retener tropas ajenas (la pre-batalla y
+                    // los odds del mapa la despliegan como propias).
+                    if(g_campaign.armies[ai].owner!=g_localFaction){
+                        int sel=g_campaign.selectedArmy;
+                        if(sel>=0&&sel<(int)g_campaign.armies.size()&&
+                           g_campaign.armies[sel].owner==g_localFaction)
+                            g_campaign.readyUnits=g_campaign.armies[sel].units;
+                        else
+                            g_campaign.readyUnits.clear();
+                    }
                 }
             }
             g_campaign.playerArmy=g_campaign.readyUnits;
@@ -1314,6 +1346,7 @@ int runBattleResultTest(){
         addArmy(FACTION_AGGRESSIVE,1,{{1,30}});         // defensor de campo
         g_campaign.allied[FACTION_DEFENSIVE]=true;
         addArmy(FACTION_DEFENSIVE,1,{{0,20}});          // aliado en la provincia
+        addArmy(FACTION_COMMERCIAL,1,{{1,25}});         // tercera facción hostil
         g_preBattle.provinceIdx=1; g_preBattle.isDefense=false;
         g_preBattle.armyIdx=pi; g_preBattle.attackerArmyIdx=-1;
         g_preBattle.attackerFaction=-1;
@@ -1341,6 +1374,12 @@ int runBattleResultTest(){
         bool again=applyBattleResultCampaign(false);
         check("A7 attack: idempotent (no double loot)",
               !again&&g_campaign.res.gold==1060.f&&g_campaign.battlesWon==1);
+        // QA1-03/QA4-01: terceras facciones hostiles fuera; la vista del
+        // host (playerProvince) solo se mueve si el vencedor es el host.
+        check("A8 attack: hostile third-party army destroyed",
+              armyIndexAt(1,FACTION_COMMERCIAL)<0);
+        check("A9 attack: playerProvince follows host winner",
+              g_campaign.playerProvince==1);
     }
 
     // ── B) Victoria en DEFENSA: el atacante IA desaparece (índices reajustados)
@@ -1513,6 +1552,96 @@ int runBattleResultTest(){
               okIdx&&di>=0&&
               armySoldiers(g_campaign.readyUnits)==120&&
               g_preBattle.armyIdx==di);
+    }
+
+    // ── H) PvP: la victoria del cliente da provincia y loot al CLIENTE (y no
+    // al host); en la provincia solo quedan vencedor + aliados (QA4-01/QA1-03)
+    {
+        reset();
+        g_campaign.pvpMode=true;
+        g_campaign.clientFaction=FACTION_AGGRESSIVE;
+        g_campaign.clientRes.gold=500.f;
+        Province p0=mkProv("Host Land",FACTION_PLAYER);
+        Province p1=mkProv("Client Base",FACTION_AGGRESSIVE);
+        Province p2=mkProv("Host Refuge",FACTION_PLAYER);
+        p0.adjacent={1,2}; p1.adjacent={0}; p2.adjacent={0};
+        g_campaign.provinces={p0,p1,p2};
+        g_campaign.provinces[0].army={{0,40}};            // guarnición del host
+        int ca=addArmy(FACTION_AGGRESSIVE,1,{{0,60}});    // atacante del cliente
+        addArmy(FACTION_PLAYER,0,{{1,50}});               // ejército del host (dueño previo)
+        addArmy(FACTION_COMMERCIAL,0,{{1,40}});           // tercera facción hostil
+        int hs=addArmy(FACTION_PLAYER,2,{{0,30}});        // ejército del host lejano
+        g_campaign.allied[FACTION_DEFENSIVE]=true;
+        addArmy(FACTION_DEFENSIVE,0,{{0,20}});            // aliado en la provincia
+        g_campaign.selectedArmy=hs; // se reajusta con cada erase (removeArmyAt)
+        g_campaign.playerProvince=2;
+        g_preBattle.provinceIdx=0; g_preBattle.isDefense=false;
+        g_preBattle.armyIdx=ca; g_preBattle.attackerArmyIdx=-1;
+        g_preBattle.attackerFaction=FACTION_AGGRESSIVE;   // facción del cliente
+        g_preBattle.enemyUnits={{0,40},{1,50}};
+        g_lastResult.playerWon=true; g_lastResult.isDefense=false;
+        g_lastResult.provinceIdx=0; g_lastResult.survivors={{0,55}};
+        g_lastResult.lootGold=75.f; g_lastResult.lootApplied=false;
+        applyBattleResultCampaign(false);
+        check("H1 pvp: province captured by the client, not the host",
+              g_campaign.provinces[0].owner==FACTION_AGGRESSIVE);
+        check("H2 pvp: garrison + prevOwner field army destroyed",
+              g_campaign.provinces[0].army.empty()&&
+              armyIndexAt(0,FACTION_PLAYER)<0);
+        check("H3 pvp: hostile third-party army destroyed",
+              armyIndexAt(0,FACTION_COMMERCIAL)<0);
+        check("H4 pvp: allied army kept",
+              armyIndexAt(0,FACTION_DEFENSIVE)>=0);
+        check("H5 pvp: client army occupies with survivors",
+              ca<(int)g_campaign.armies.size()&&
+              g_campaign.armies[ca].province==0&&
+              g_campaign.armies[ca].moved&&
+              g_campaign.armies[ca].units.size()==1&&
+              g_campaign.armies[ca].units[0]==std::make_pair(0,55));
+        check("H6 pvp: loot to clientRes, host res untouched",
+              g_campaign.clientRes.gold==575.f&&g_campaign.res.gold==1000.f);
+        check("H7 pvp: playerProvince (host view) not moved",
+              g_campaign.playerProvince==2);
+        int sel=g_campaign.selectedArmy;
+        check("H8 pvp: host view never holds foreign troops",
+              sel>=0&&sel<(int)g_campaign.armies.size()&&
+              g_campaign.armies[sel].owner==FACTION_PLAYER&&
+              g_campaign.readyUnits==g_campaign.armies[sel].units);
+        check("H9 pvp: distant host army untouched",
+              armyIndexAt(2,FACTION_PLAYER)>=0);
+    }
+
+    // ── I) PvP: conquista de provincia IA por el cliente (QA4-01)
+    {
+        reset();
+        g_campaign.pvpMode=true;
+        g_campaign.clientFaction=FACTION_COMMERCIAL;
+        g_campaign.clientRes.gold=100.f;
+        Province p0=mkProv("AI Land",FACTION_AGGRESSIVE);
+        Province p1=mkProv("Client Base",FACTION_COMMERCIAL);
+        p0.adjacent={1}; p1.adjacent={0};
+        g_campaign.provinces={p0,p1};
+        g_campaign.provinces[0].army={{0,40}};
+        int ca=addArmy(FACTION_COMMERCIAL,1,{{0,60}});
+        g_campaign.playerProvince=1;
+        g_preBattle.provinceIdx=0; g_preBattle.isDefense=false;
+        g_preBattle.armyIdx=ca; g_preBattle.attackerArmyIdx=-1;
+        g_preBattle.attackerFaction=FACTION_COMMERCIAL;
+        g_preBattle.enemyUnits={{0,40}};
+        g_lastResult.playerWon=true; g_lastResult.isDefense=false;
+        g_lastResult.provinceIdx=0; g_lastResult.survivors={{0,50}};
+        g_lastResult.lootGold=50.f; g_lastResult.lootApplied=false;
+        applyBattleResultCampaign(false);
+        check("I1 pvp: AI province captured by the client",
+              g_campaign.provinces[0].owner==FACTION_COMMERCIAL);
+        check("I2 pvp: garrison cleared", g_campaign.provinces[0].army.empty());
+        check("I3 pvp: client loot, host res untouched",
+              g_campaign.clientRes.gold==150.f&&g_campaign.res.gold==1000.f);
+        check("I4 pvp: playerProvince (host view) not moved",
+              g_campaign.playerProvince==1);
+        check("I5 pvp: client army occupies",
+              ca<(int)g_campaign.armies.size()&&
+              g_campaign.armies[ca].province==0&&g_campaign.armies[ca].moved);
     }
 
     if(fails==0){ printf("BATTERESULT PASS\n"); return 0; }
