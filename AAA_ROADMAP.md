@@ -470,6 +470,20 @@ Prioridad: **P0** = bloquea todo lo demás, **P1** = núcleo de jugabilidad,
 
 **Orden crítico**: `0 → R1 → D1 → (D2, G1, B1, I1, E1) → D3/D4 → D5/D6 → P2/P3`.
 
+### 7.1 Progreso de R1 y D1 (2026-10-12)
+
+- [x] **R1 paso 1** — pantalla MULTIPLAYER extraída de `main.cpp` a
+  `src/ui_multiplayer.{h,cpp}` (refactor mecánico: el bloque movido es
+  byte-idéntico, mismas coordenadas/textos/colores/flujo; `main.cpp`
+  3583 → 3469 líneas). Commit `02a84d7`. **Siguiente**: extraer el resto
+  de pantallas (campaña, ciudad, batalla, menús, editor) a `ui/*.cpp`.
+- [x] **D1 paso 1** — unidades data-driven: `data/base/units/*.unit`
+  (10 unidades con los valores golden de `initBuiltinTypes()`), parser INI
+  propio `src/gamedata.{h,cpp}` y fallback a builtins con aviso
+  `archivo:línea` (consola + battleLog). Self-test headless `-datatest`
+  (11 checks: golden / fallback / archivo inválido). Commit `476069f`.
+  **Siguiente (D1 paso 2)**: edificios `*.bld` y facciones `*.fac`.
+
 ---
 
 ## 8. Deuda técnica inmediata

@@ -1456,3 +1456,55 @@ Defectos P2/P3 confirmados por QA sobre `db20de7` (2 commits tematicos):
   (solo lo hace la captura en la rama A de `applyBattleResultCampaign`), asi
   que el ejercito superviviente puede volver a atacar el mismo turno - vale
   igual para host y cliente (preexistente).
+
+### 12.7 R1 paso 1 + D1 paso 1: refactor UI y unidades data-driven (2026-10-12)
+
+**R1 paso 1 - pantalla MULTIPLAYER extraida de `main.cpp` (`02a84d7`)**
+
+- `src/main.cpp`: **3583 -> 3469 lineas** en este paso (3472 despues de
+  anadir el flag `-datatest` de D1). El bloque FASE G (lobby: status,
+  jugadores, toggle PvP, HOST/STOP, campo IP + JOIN, hints y BACK) se mueve
+  a los nuevos `src/ui_multiplayer.cpp` (130 lineas) y `src/ui_multiplayer.h`
+  (12 lineas), con `updateDrawMultiplayer(Vector2)` como unica entrada.
+- Refactor **100% mecanico**: los 114 lineas movidas son **byte-identicas**
+  al original (coordenadas, textos, colores, flujo y el `static s_ip` del
+  campo de IP intactos); `main.cpp` solo anade el `#include` y ya llamaba a
+  la funcion desde el `switch`. Sin cambios en el resto de pantallas.
+- `build.bat` no cambia (glob `src/*.cpp`).
+- Tests: build 0 errores / 0 warnings; `test_g_lobby` (8), `test_net` (10)
+  y `test_h_sync` (11) ALL PASS.
+
+**D1 paso 1 - unidades data-driven con fallback (`476069f`)**
+
+- Nuevos `src/gamedata.{h,cpp}`: parser INI propio (`clave = valor`,
+  comentarios `;`/`#` en linea propia, cabecera opcional `[...]` y `schema`
+  versionado) sin dependencias externas, siguiendo el precedente de
+  `config.cpp`.
+- `data/base/units/*.unit` (10 archivos): las 10 unidades con los **MISMOS
+  valores golden** de `initBuiltinTypes()` (`elements.cpp`), generados
+  directamente del codigo (cero transcripcion manual). Cubren **todos** los
+  campos de `UnitTypeDef`: nombre, soldiers/hp/armor/speed, melee.*, range,
+  missile.*, recruit.*, maint.*, morale, color, sprite, weapon, requires,
+  builtin y lore.
+- Carga: `initBuiltinTypes()` pasa a ser `defineBuiltinTypes()` (builtins,
+  sin GL) + `loadUnitData()` + `loadUnitSheets()`. **Regla de fallback**:
+  una unidad solo se sustituye si su archivo existe y TODAS sus claves son
+  validas; si falta el archivo o una clave se conserva el builtin y se avisa
+  con `archivo:linea` por consola (`printf` + `TraceLog`) y por `battleLog`.
+  Claves desconocidas: aviso con `archivo:linea` y se ignoran (no invalidan).
+- Nuevo self-test headless **`-datatest`** (11 checks, exit 0/1): A) con
+  `data/` presente -> 10/10 cargadas y stats identicas a los builtins
+  (comparacion campo a campo); B) sin `data/` -> 10/10 avisos de fallback y
+  valores identicos a builtins; C) archivo invalido -> error con
+  `archivo:linea` (valor invalido y clave ausente) + fallback completo sin
+  cambios parciales ni crash.
+- Verificacion del criterio "con `data/` ausente arranca y juega igual":
+  renombrando `data/` a `data_off` el `test_faseJ` queda ALL PASS (100% via
+  fallback) y `data/` se restaura despues.
+- Regresion: build 0/0; `-battletest`, `-nettest`, `-datatest` exit 0;
+  `test_faseJ`, `test_ranged`, `test_faseK`, `test_city`, `test_net` y
+  `test_h_sync` ALL PASS. Nota: el primer intento de `test_faseJ` dejo 2
+  checks en FAIL por timing/foco (E y F) y el reintento unico salio ALL
+  PASS (incidencia aislada, ver 12.5).
+- Pendiente (D1 paso 2): edificios `*.bld` y facciones `*.fac` con el mismo
+  esquema de parser y fallback.
