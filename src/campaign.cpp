@@ -1031,18 +1031,31 @@ bool processTurn(){
                 }
             } else if(eStr>(int)(targetDef*0.75f)&&roll<attackChance*0.8f){
                 // Ataque => batalla defensiva del jugador
+                // QA1-01: capturar al atacante ANTES de fusionar. La fusion
+                // reconstruye g_campaign.armies (std::move) y deja `a` colgada
+                // (use-after-free al leer a.owner/a.units); ademas elimina
+                // ejercitos propios anteriores a `ai` y los indices se
+                // desplazan (attackerArmyIdx apuntaria a otro ejercito).
+                const FactionId atkOwner=a.owner;
+                const int atkId=a.id;
+                const std::vector<std::pair<int,int>> atkUnits=a.units;
                 mergePlayerDefenders(target);
+                // Reindexar por id (unico: nextArmyId) tras la fusion
+                int atkIdx=-1;
+                for(int k=0;k<(int)g_campaign.armies.size();k++)
+                    if(g_campaign.armies[k].id==atkId){ atkIdx=k; break; }
+                if(atkIdx<0) continue; // imposible: solo se fusionan ejercitos propios
                 int di=armyIndexAt(target,FACTION_PLAYER);
                 selectArmy(di); // readyUnits = defensores fusionados
                 g_preBattle.provinceIdx=target;
                 g_preBattle.isDefense=true;
                 g_preBattle.fogOfWar=false;
                 g_preBattle.estimatedEnemyStrength=eStr+(int)((frandMT()-0.5f)*20);
-                g_preBattle.attackerFaction=a.owner;
-                g_preBattle.attackerArmyIdx=ai;
+                g_preBattle.attackerFaction=atkOwner;
+                g_preBattle.attackerArmyIdx=atkIdx;
                 g_preBattle.armyIdx=di;
                 g_preBattle.hadKing=(di>=0&&armyHasKing(g_campaign.armies[di].units));
-                g_preBattle.enemyUnits=a.units;
+                g_preBattle.enemyUnits=atkUnits;
                 g_preBattle.include.assign(g_campaign.readyUnits.size(),true);
                 for(int j=12;j<(int)g_preBattle.include.size();j++)
                     g_preBattle.include[j]=false;
@@ -1100,6 +1113,10 @@ void removeArmyAt(int idx){
     else if(g_preBattle.armyIdx>idx)  g_preBattle.armyIdx--;
     if(g_preBattle.attackerArmyIdx==idx)     g_preBattle.attackerArmyIdx=-1;
     else if(g_preBattle.attackerArmyIdx>idx) g_preBattle.attackerArmyIdx--;
+    // QA1-04: armyMoveIdx guia la animacion de movimiento (main.cpp) y
+    // marcara `moved` en el ejercito que apunte tras el erase.
+    if(g_campaign.armyMoveIdx==idx)     g_campaign.armyMoveIdx=-1;
+    else if(g_campaign.armyMoveIdx>idx) g_campaign.armyMoveIdx--;
 }
 
 bool applyBattleResultCampaign(bool quickBattle){
@@ -1120,7 +1137,7 @@ bool applyBattleResultCampaign(bool quickBattle){
                 const FieldArmy& fa=g_campaign.armies[k];
                 if(fa.province==g_lastResult.provinceIdx&&fa.owner==prevOwner){
                     battleLogAdd(TextFormat("Enemy army destroyed at %s!",prov.name));
-                    removeArmyAt(k); // reajusta g_preBattle.armyIdx si hace falta
+                    removeArmyAt(k); // reajusta g_preBattle/armyMoveIdx si hace falta
                 }
             }
             // Fase J: el ejército ganador ocupa la provincia capturada
@@ -1443,6 +1460,59 @@ int runBattleResultTest(){
               g_campaign.armies[0].units.size()==1&&
               g_campaign.armies[0].units[0]==std::make_pair(0,50));
         check("E3 quick: no king/loss flags", !g_kingLost);
+    }
+
+    // ── F) removeArmyAt reajusta armyMoveIdx (QA1-04)
+    {
+        reset();
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        g_campaign.armyMoveIdx=2;
+        removeArmyAt(0); // idx < armyMoveIdx
+        check("F1 removeArmyAt: armyMoveIdx decremented",
+              g_campaign.armyMoveIdx==1&&(int)g_campaign.armies.size()==2);
+        g_campaign.armyMoveIdx=1;
+        removeArmyAt(1); // idx == armyMoveIdx
+        check("F2 removeArmyAt: armyMoveIdx reset when its army dies",
+              g_campaign.armyMoveIdx==-1&&(int)g_campaign.armies.size()==1);
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        addArmy(FACTION_PLAYER,0,{{0,10}});
+        g_campaign.armyMoveIdx=0;
+        removeArmyAt(2); // idx > armyMoveIdx
+        check("F3 removeArmyAt: armyMoveIdx below idx unchanged",
+              g_campaign.armyMoveIdx==0&&(int)g_campaign.armies.size()==2);
+    }
+
+    // ── G) processTurn: el atacante IA se reindexa tras fusionar defensores
+    // (regresión QA1-01: `FieldArmy& a` quedaba colgada al reconstruir el
+    //  vector y attackerArmyIdx apuntaba a otro índice tras la fusión)
+    {
+        reset();
+        Province p0=mkProv("Home",FACTION_PLAYER);
+        Province p1=mkProv("Enemy Camp",FACTION_AGGRESSIVE);
+        p0.adjacent={1}; p1.adjacent={0};
+        g_campaign.provinces={p0,p1};
+        addArmy(FACTION_PLAYER,0,{{0,60}});          // índice 0: defensor A
+        addArmy(FACTION_PLAYER,0,{{0,60}});          // índice 1: defensor B
+        addArmy(FACTION_AGGRESSIVE,1,{{1,300}});     // índice 2: atacante IA
+        g_rng.seed(20261012u);                       // run determinista
+        bool pending=false;
+        for(int t=0;t<1000&&!pending;t++) pending=processTurn();
+        int bi=g_preBattle.attackerArmyIdx;
+        bool okIdx=pending&&bi>=0&&bi<(int)g_campaign.armies.size();
+        check("G1 processTurn: defensive battle triggered", pending);
+        check("G2 processTurn: attackerArmyIdx valid after merge", okIdx);
+        check("G3 processTurn: attacker army reindexed by id",
+              okIdx&&g_campaign.armies[bi].owner==FACTION_AGGRESSIVE&&
+              g_preBattle.attackerFaction==(int)FACTION_AGGRESSIVE);
+        check("G4 processTurn: enemyUnits = attacker units",
+              okIdx&&g_preBattle.enemyUnits==g_campaign.armies[bi].units);
+        int di=armyIndexAt(0,FACTION_PLAYER);
+        check("G5 processTurn: defenders merged (readyUnits view)",
+              okIdx&&di>=0&&
+              armySoldiers(g_campaign.readyUnits)==120&&
+              g_preBattle.armyIdx==di);
     }
 
     if(fails==0){ printf("BATTERESULT PASS\n"); return 0; }
