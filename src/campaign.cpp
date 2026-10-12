@@ -866,9 +866,13 @@ bool processTurn(){
         }
         // Advance construction
         if(c.constructing>=0){
+            int bt=c.constructing;
+            if(bt<0||bt>=BLD_COUNT){
+                c.constructing=-1; c.constructSlot=-1;
+                continue;
+            }
             c.constructTurns--;
             if(c.constructTurns<=0){
-                int bt=c.constructing;
                 c.built[bt]=true;
                 c.count[bt]=(unsigned char)std::min(255,(int)c.count[bt]+1);
                 // v11: colocar en la matriz (murallas van al perímetro, no al grid)

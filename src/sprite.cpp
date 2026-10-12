@@ -296,7 +296,7 @@ static int sheetRoleFor(const UnitTypeDef& td){
 static void freeSheets(){
     for(int t=0;t<2;t++)
         for(int r=0;r<5;r++)
-            if(s_sheets[t][r].id>0){UnloadTexture(s_sheets[t][r]);s_sheets[t][r]={0};}
+            if(s_sheets[t][r].id>0){UnloadTexture(s_sheets[t][r]);s_sheets[t][r]={};}
     s_sheetsLoaded=false;
 }
 

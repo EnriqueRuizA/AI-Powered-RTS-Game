@@ -1831,6 +1831,7 @@ GameState updateDrawCityManagement(Vector2 mouse){
     static int g_placeCity=-1;
     if(g_placeCity!=g_campaign.viewedCity){ g_placeMode=-1; g_placeCity=g_campaign.viewedCity; }
     if(city.constructing>=0) g_placeMode=-1; // ya hay una construcción en curso
+    if(g_placeMode>=BLD_COUNT) g_placeMode=-1; // fuera de rango: dato corrupto
 
     bool noOtherConstruction=(city.constructing<0);
 
@@ -1881,6 +1882,7 @@ GameState updateDrawCityManagement(Vector2 mouse){
         if(placing&&empty&&!constructingHere&&hoverSlot&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)
            &&noOtherConstruction&&netCanEdit()){
             int bt=g_placeMode;
+            if(bt<0||bt>=BLD_COUNT) continue;
             bool canAfford=(res.gold>=bldGoldCost[bt]&&res.wood>=bldWoodCost[bt]
                             &&res.stone>=bldStoneCost[bt]&&res.iron>=bldIronCost[bt]);
             if(canAfford){
@@ -1894,6 +1896,11 @@ GameState updateDrawCityManagement(Vector2 mouse){
             }
         }
     }
+    // g_placeMode puede haber cambiado en este mismo frame (colocacion
+    // completada): recalcular para no indexar bldNames[] con un indice invalido
+    if(g_placeMode>=BLD_COUNT) g_placeMode=-1;
+    placing=(g_placeMode>=0);
+
     // Murallas (perímetro, fuera de la matriz)
     {
         float wlY=matY+4.f*(matCell+matGap)+8.f;

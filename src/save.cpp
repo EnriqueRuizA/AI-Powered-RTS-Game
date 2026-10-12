@@ -196,6 +196,12 @@ bool deserializeCampaignState(CampaignState& st, const char* data, size_t size){
                 for(int bi=0;bi<BLD_COUNT;bi++) p.city.count[bi]=p.city.built[bi]?1:0;
                 p.city.constructSlot=-1;
             }
+            // Sanidad de indices de construccion (dato externo corrupto)
+            if(p.city.constructing<0||p.city.constructing>=BLD_COUNT) p.city.constructing=-1;
+            if(p.city.constructTurns<0) p.city.constructTurns=0;
+            if(p.city.constructSlot<-1||p.city.constructSlot>=16) p.city.constructSlot=-1;
+            for(int s=0;s<16;s++)
+                if(p.city.grid[s]<-1||p.city.grid[s]>=BLD_COUNT) p.city.grid[s]=-1;
         }
         int nadj=b.r1<int>();
         if(!b.ok||nadj<0||nadj>64) return false;

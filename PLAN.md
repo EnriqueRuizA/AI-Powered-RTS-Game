@@ -1304,3 +1304,21 @@ incidencias reales:
   sin usar). `settings.example.ini` al día (4 claves de formación/prep).
 - Tests: suite verde (`test_faseJ/K/I/D`, `test_ranged`, `test_net`,
   `test_h_sync`).
+
+#### Hotfix P0: crash al colocar edificios en la matriz (2026-10-12)
+
+- **Causa raiz**: en `updateDrawCityManagement` el flag `placing` se cacheaba
+  antes del bucle de la matriz. Al confirmar la colocacion la rama de clic
+  ponia `g_placeMode=-1`, pero la cabecera del catalogo seguia ejecutando
+  `bldNames[g_placeMode]` -> lectura de `bldNames[-1]` (los 8 bytes previos
+  del array valen `0xFFFFFFFFFFFFFFFF`) -> ACCESS_VIOLATION en el mismo frame
+  del clic. Reproducido: exit code `0xC0000005`.
+- **Fix**: clamp de `g_placeMode` a `BLD_COUNT`, guarda `if(bt<0||bt>=BLD_COUNT)`
+  al pulsar una celda y recalculo de `placing` tras el bucle (main.cpp);
+  bounds-check de `c.constructing` antes de indexar `built`/`count`/`bldNames`
+  en `processTurn` (campaign.cpp); saneado de `constructing`,
+  `constructTurns`, `constructSlot` y `grid[]` al cargar (save.cpp).
+- **Verificacion**: tras el fix la colocacion funciona (celda en construccion,
+  oro 500 -> 380) sin crash; ESC cancela el modo colocacion.
+- **Tests**: nuevo `build/test_city.ps1` (BUILD -> ESC -> BUILD -> clic en celda
+  vacia) + regresion `test_faseJ`, `test_faseD`, `test_faseK`, `test_ranged`.
