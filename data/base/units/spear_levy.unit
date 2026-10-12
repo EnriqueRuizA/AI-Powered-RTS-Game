@@ -1,0 +1,37 @@
+; data/base/units/spear_levy.unit - Spear Levy
+; Unidad base del juego (D1 data-driven). Valores golden identicos a
+; initBuiltinTypes() en src/elements.cpp: si falta este archivo o alguna
+; clave, el juego mantiene el builtin y avisa por consola/battleLog con
+; archivo:linea (parser: src/gamedata.cpp).
+; requires = mascara de bits: 0=Barracks 1=Stable 2=Range 3=Smithy 4=Workshop
+;           (tambien acepta nombres: "Barracks, Smithy")
+; weapon   = 0=spear 1=axe 2=poleaxe 3=hammer
+; sprite   = Infantry | Cavalry | Ranged    color = R G B
+schema   = 1
+name     = Spear Levy
+soldiers  = 60
+hp        = 12.0
+armor     = 0
+speed     = 80
+melee.attack   = 18
+melee.defense  = 12
+melee.base     = 8.0
+melee.ap       = 1.5
+melee.interval = 1.8
+range          = 0
+missile.base   = 0.0
+missile.ap     = 0.0
+missile.reload = 0.0
+recruit.gold   = 180
+recruit.food   = 30
+recruit.iron   = 0
+recruit.turns  = 1
+maint.gold     = 20
+maint.food     = 20
+morale         = 80.0
+color    = 200 180 140
+sprite   = Infantry
+weapon   = 0
+requires = 1
+builtin  = 1
+lore     = Peasant levy armed with spears. Weak but cheap and numerous.

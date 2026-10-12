@@ -1,0 +1,37 @@
+; data/base/units/king.unit - King
+; Unidad base del juego (D1 data-driven). Valores golden identicos a
+; initBuiltinTypes() en src/elements.cpp: si falta este archivo o alguna
+; clave, el juego mantiene el builtin y avisa por consola/battleLog con
+; archivo:linea (parser: src/gamedata.cpp).
+; requires = mascara de bits: 0=Barracks 1=Stable 2=Range 3=Smithy 4=Workshop
+;           (tambien acepta nombres: "Barracks, Smithy")
+; weapon   = 0=spear 1=axe 2=poleaxe 3=hammer
+; sprite   = Infantry | Cavalry | Ranged    color = R G B
+schema   = 1
+name     = King
+soldiers  = 1
+hp        = 300.0
+armor     = 32
+speed     = 80
+melee.attack   = 55
+melee.defense  = 45
+melee.base     = 24.0
+melee.ap       = 10.0
+melee.interval = 1.1
+range          = 0
+missile.base   = 0.0
+missile.ap     = 0.0
+missile.reload = 0.0
+recruit.gold   = -1
+recruit.food   = -1
+recruit.iron   = -1
+recruit.turns  = -1
+maint.gold     = 12
+maint.food     = 6
+morale         = 99.0
+color    = 240 200 60
+sprite   = Infantry
+weapon   = 1
+requires = 0
+builtin  = 1
+lore     = The sovereign himself. If he falls in battle, the realm is lost.

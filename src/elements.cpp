@@ -1,5 +1,6 @@
 #include "elements.h"
 #include "config.h"
+#include "gamedata.h"
 #include "util.h"
 #include "ui.h"
 #include "sprite.h"
@@ -26,8 +27,8 @@ std::vector<Texture2D>   g_enemyTextures;
 int   g_formPerRow  = 5;
 float g_formSpacing = 26.f;
 
-void initBuiltinTypes(){
-    g_unitTypes.clear();
+void defineBuiltinTypes(std::vector<UnitTypeDef>& out){
+    out.clear();
     // Helper lambda
     auto add=[&](const char* name,int soldiers,float hp,int armor,int spd,
                  int matk,int mdef,float mbase,float map2,float mint,
@@ -47,7 +48,7 @@ void initBuiltinTypes(){
         t.r=r; t.g=g; t.b=b; t.spriteBase=spr; t.weaponHint=wh;
         t.isBuiltin=true; t.buildingReqs=bReqs;
         strncpy(t.lore,lore,sizeof(t.lore)-1); t.lore[sizeof(t.lore)-1]='\0';
-        g_unitTypes.push_back(t);
+        out.push_back(t);
     };
 
     // Bit flags for building reqs: 0=Barracks,1=Stable,2=Range,3=Smithy,4=Workshop
@@ -66,7 +67,15 @@ void initBuiltinTypes(){
     add("General",                 1,150, 25, 80,  45,  35, 20.f, 8.f, 1.2f, 0,  0.f,  0.f, 0.f,   -1, -1,  -1,  -1,   8,  4, 96.f, 210,175, 90, SPR_INFANTRY,  1,   0,  "A battlefield commander. Required to lead a field army.");
     add("King",                    1,300, 32, 80,  55,  45, 24.f,10.f, 1.1f, 0,  0.f,  0.f, 0.f,   -1, -1,  -1,  -1,  12,  6, 99.f, 240,200, 60, SPR_INFANTRY,  1,   0,  "The sovereign himself. If he falls in battle, the realm is lost.");
 
+}
+
+void initBuiltinTypes(){
+    defineBuiltinTypes(g_unitTypes);
     g_vanillaUnitTypes = g_unitTypes;
+
+    // D1: override desde data/base/units/*.unit. Si falta un archivo o una
+    // clave se mantiene el builtin (fallback) y se avisa con archivo:linea.
+    loadUnitData();
 
     loadUnitSheets(); // hojas Kenney (assets/sprites); si faltan → procedural
     g_playerTextures.clear();

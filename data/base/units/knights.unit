@@ -1,0 +1,37 @@
+; data/base/units/knights.unit - Knights
+; Unidad base del juego (D1 data-driven). Valores golden identicos a
+; initBuiltinTypes() en src/elements.cpp: si falta este archivo o alguna
+; clave, el juego mantiene el builtin y avisa por consola/battleLog con
+; archivo:linea (parser: src/gamedata.cpp).
+; requires = mascara de bits: 0=Barracks 1=Stable 2=Range 3=Smithy 4=Workshop
+;           (tambien acepta nombres: "Barracks, Smithy")
+; weapon   = 0=spear 1=axe 2=poleaxe 3=hammer
+; sprite   = Infantry | Cavalry | Ranged    color = R G B
+schema   = 1
+name     = Knights
+soldiers  = 24
+hp        = 42.0
+armor     = 26
+speed     = 140
+melee.attack   = 50
+melee.defense  = 34
+melee.base     = 26.0
+melee.ap       = 18.0
+melee.interval = 1.5
+range          = 0
+missile.base   = 0.0
+missile.ap     = 0.0
+missile.reload = 0.0
+recruit.gold   = 960
+recruit.food   = 120
+recruit.iron   = 120
+recruit.turns  = 4
+maint.gold     = 110
+maint.food     = 25
+morale         = 92.0
+color    = 220 220 200
+sprite   = Cavalry
+weapon   = 0
+requires = 18
+builtin  = 1
+lore     = Heavy armored knights. Devastating charge, supreme melee prowess.

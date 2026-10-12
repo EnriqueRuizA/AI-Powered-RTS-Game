@@ -51,7 +51,10 @@ extern std::vector<Texture2D>   g_playerTextures;
 extern std::vector<Texture2D>   g_enemyTextures;
 
 int unitTypeCount();        // (:418)
-void initBuiltinTypes();    // (:376)
+// Rellena `out` con los 10 tipos built-in (valores golden). No toca GL:
+// initBuiltinTypes() lo usa y tambien el self-test -datatest.
+void defineBuiltinTypes(std::vector<UnitTypeDef>& out);
+void initBuiltinTypes();    // (:376) builtins + data/base/units + texturas
 
 // (:493-508)
 struct Soldier {

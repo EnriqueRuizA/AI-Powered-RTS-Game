@@ -1,0 +1,37 @@
+; data/base/units/mounted_sergeants.unit - Mounted Sergeants
+; Unidad base del juego (D1 data-driven). Valores golden identicos a
+; initBuiltinTypes() en src/elements.cpp: si falta este archivo o alguna
+; clave, el juego mantiene el builtin y avisa por consola/battleLog con
+; archivo:linea (parser: src/gamedata.cpp).
+; requires = mascara de bits: 0=Barracks 1=Stable 2=Range 3=Smithy 4=Workshop
+;           (tambien acepta nombres: "Barracks, Smithy")
+; weapon   = 0=spear 1=axe 2=poleaxe 3=hammer
+; sprite   = Infantry | Cavalry | Ranged    color = R G B
+schema   = 1
+name     = Mounted Sergeants
+soldiers  = 40
+hp        = 20.0
+armor     = 8
+speed     = 160
+melee.attack   = 28
+melee.defense  = 20
+melee.base     = 15.0
+melee.ap       = 4.0
+melee.interval = 1.4
+range          = 0
+missile.base   = 0.0
+missile.ap     = 0.0
+missile.reload = 0.0
+recruit.gold   = 520
+recruit.food   = 80
+recruit.iron   = 40
+recruit.turns  = 2
+maint.gold     = 60
+maint.food     = 30
+morale         = 83.0
+color    = 140 90 60
+sprite   = Cavalry
+weapon   = 0
+requires = 2
+builtin  = 1
+lore     = Light cavalry. Swift flankers and pursuit specialists.

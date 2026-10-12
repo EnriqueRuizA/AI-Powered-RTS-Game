@@ -16,6 +16,7 @@
 #include "prof.h"
 #include "mapart.h"
 #include "ui_multiplayer.h"
+#include "gamedata.h"
 #include <vector>
 #include <string>
 #include <deque>
@@ -3321,6 +3322,8 @@ int main(int argc, char** argv){
         }
         // Self-test headless de las rutas de fin de batalla (sin ventana)
         if(strcmp(argv[i],"-battletest")==0) return runBattleResultTest();
+        // D1: self-test headless de unidades data-driven (golden/fallback)
+        if(strcmp(argv[i],"-datatest")==0) return runUnitDataTest();
     }
     // Load persistent settings before creating the window (so resolution applies on startup)
     loadSettings();                  // 3.1: load persistent settings

@@ -1,0 +1,37 @@
+; data/base/units/crossbow_retinue.unit - Crossbow Retinue
+; Unidad base del juego (D1 data-driven). Valores golden identicos a
+; initBuiltinTypes() en src/elements.cpp: si falta este archivo o alguna
+; clave, el juego mantiene el builtin y avisa por consola/battleLog con
+; archivo:linea (parser: src/gamedata.cpp).
+; requires = mascara de bits: 0=Barracks 1=Stable 2=Range 3=Smithy 4=Workshop
+;           (tambien acepta nombres: "Barracks, Smithy")
+; weapon   = 0=spear 1=axe 2=poleaxe 3=hammer
+; sprite   = Infantry | Cavalry | Ranged    color = R G B
+schema   = 1
+name     = Crossbow Retinue
+soldiers  = 40
+hp        = 18.0
+armor     = 8
+speed     = 70
+melee.attack   = 22
+melee.defense  = 18
+melee.base     = 9.0
+melee.ap       = 2.0
+melee.interval = 2.2
+range          = 300
+missile.base   = 16.0
+missile.ap     = 7.0
+missile.reload = 4.0
+recruit.gold   = 420
+recruit.food   = 60
+recruit.iron   = 60
+recruit.turns  = 2
+maint.gold     = 50
+maint.food     = 20
+morale         = 82.0
+color    = 80 130 80
+sprite   = Ranged
+weapon   = 0
+requires = 12
+builtin  = 1
+lore     = Trained crossbowmen. Slow reload but punishing armor penetration.
