@@ -4,7 +4,7 @@ mode: subagent
 temperature: 0.1
 permission:
   edit: deny
-  bash: ask
+  bash: allow
   skill:
     rts-qa-integration: allow
 ---

@@ -4,7 +4,7 @@ mode: subagent
 temperature: 0.2
 permission:
   edit: allow
-  bash: ask
+  bash: allow
   skill:
     rts-implement-feature: allow
 ---
