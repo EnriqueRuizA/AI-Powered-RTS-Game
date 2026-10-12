@@ -1352,3 +1352,56 @@ incidencias reales:
   (headless, 23 checks: ataque, defensa, derrota, guarnición legada, quick
   battle, idempotencia y reajuste de índices). Regresión verde: `test_faseD`,
   `test_faseJ`, `test_ranged`, `test_city`, `test_faseK`, `test_net`.
+
+#### Fix QA1/QA4: UAF en processTurn, armyMoveIdx y victoria PvP (2026-10-12)
+
+Defectos P1/P2/P3 confirmados por QA sobre el fix `514829e` (5 fixes en
+2 commits tematicos):
+
+- **QA1-01 (P2) - use-after-free de `FieldArmy&` en `processTurn`**
+  (`campaign.cpp`): el atacante IA se referenciaba con
+  `FieldArmy& a=g_campaign.armies[ai]` y `mergePlayerDefenders(target)`
+  reconstruia el vector (`g_campaign.armies=std::move(keep)`), dejando `a`
+  colgada: `g_preBattle.attackerFaction=a.owner` y
+  `g_preBattle.enemyUnits=a.units` leian memoria liberada (UB) y
+  `attackerArmyIdx=ai` podia quedar fuera de rango si la fusion eliminaba
+  ejercitos propios con indice menor (el atacante derrotado sobrevivia).
+  **Fix**: capturar `owner/id/units` ANTES de la fusion y reindexar al
+  atacante por `id` (unico via `nextArmyId`); `continue` si no se encuentra.
+- **QA1-04 (P2) - `removeArmyAt` no ajustaba `armyMoveIdx`**: ajustaba
+  `selectedArmy`/`armyIdx`/`attackerArmyIdx` pero no el indice que guia la
+  animacion de movimiento (`main.cpp`), que podia marcar `moved` en otro
+  ejercito al terminar la animacion. **Fix**: decrementar si
+  `armyMoveIdx>idx`; reset a -1 si `armyMoveIdx==idx`.
+- **QA1-03 (P3) - la rama (A) solo borraba ejercitos del `prevOwner`**: un
+  ejercito de una tercera faccion no aliada sobrevivia a la captura.
+  **Fix**: en la provincia capturada solo quedan el vencedor y su bando;
+  se destruyen los del dueño previo (perdedor) y los hostiles
+  (`owner!=vencedor && !factionIsPlayerSide(owner)`); los aliados militares
+  se conservan (regresion cubierta por A4/H4).
+- **QA4-01 (P1) - PvP: la victoria del cliente daba provincia y loot al
+  host**: la rama (A) hacia `prov.owner=FACTION_PLAYER` incondicional y el
+  loot siempre ingresaba a `g_campaign.res`. **Fix**: el vencedor es
+  `g_preBattle.attackerFaction` (fallback `FACTION_PLAYER` cuando es -1 =
+  guarnicion legada / ataque del host); el loot del cliente va a
+  `clientRes`; `playerProvince` (vista del host) solo se mueve si el
+  vencedor es `FACTION_PLAYER`; el ejercito ganador solo se selecciona si
+  es de la faccion local. `NET_CMD_ATTACK` fija ahora
+  `attackerFaction=cf` (en co-op cf es `FACTION_PLAYER`, sin cambio).
+- **QA4-03 (P2) - `NET_CMD_ATTACK` resolvia con el ejercito del host**:
+  `selectArmy(mi)` exige `owner==g_localFaction` (host) y caia al primer
+  ejercito propio, asi la batalla se libraba con tropas del host y los
+  supervivientes aterrizaban en el ejercito del cliente. **Fix**: sin
+  `selectArmy`; `readyUnits` se construye directamente de
+  `armies[mi].units` (indice validado y no vacio), `g_preBattle.armyIdx=mi`
+  (supervivientes -> `armies[mi]`) y `attackerFaction=cf`. Tras una
+  batalla remota, `readyUnits` del host vuelve a su ejercito seleccionado
+  (la vista nunca retiene tropas ajenas: la usan los odds y el despliegue).
+- **Tests**: `runBattleResultTest` pasa de 23 a 47 checks - nuevos F
+  (`removeArmyAt` + `armyMoveIdx`), G (`processTurn` con RNG sembrado:
+  reindice del atacante tras la fusion = escenario del UAF), H (PvP:
+  conquista + loot en provincia del host) e I (PvP: conquista de provincia
+  IA) mas A8/A9. `build/test_battleres.ps1` ampliado a 20 comprobaciones y
+  corregido un `match` con typo ("retreats"). Regresion verde:
+  `test_faseD`, `test_faseJ`, `test_faseK`, `test_city`, `test_net`,
+  `test_ranged`.
