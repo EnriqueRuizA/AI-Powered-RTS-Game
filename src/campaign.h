@@ -143,6 +143,10 @@ extern PreBattleState g_preBattle; // (:676)
 bool  factionIsPlayerSide(FactionId f);
 bool  factionIsHuman(FactionId f);   // PvP: host (PLAYER) o cliente (clientFaction)
 Color factionDisplayColor(FactionId f);
+// Relacion de hostilidad (NEW-QA2-01): true si `actor` puede atacar a
+// `target`. Gate unico del mapa (odds + click de ataque) y de la validacion
+// de NET_CMD_ATTACK en el host, para que el PvP sea bidireccional.
+bool  isHostileTo(FactionId actor, FactionId target);
 // Faccion que controla el jugador local: FACTION_PLAYER (host/solo/co-op) o
 // clientFaction (cliente PvP). main.cpp la actualiza cada frame segun el rol.
 extern FactionId g_localFaction;

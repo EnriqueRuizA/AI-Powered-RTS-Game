@@ -1163,8 +1163,11 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
             int selArmy=g_campaign.selectedArmy;
             bool armyCanAct=selArmy>=0&&selArmy<(int)g_campaign.armies.size()
                             &&!g_campaign.armies[selArmy].moved;
-            // Fase I: sin odds sobre provincias aliadas (ni propias)
-            bool showOdds=isAdjHover&&!armyMoving&&!factionIsPlayerSide(p.owner)
+            // Fase I: sin odds sobre provincias aliadas (ni propias).
+            // NEW-QA2-01: la hostilidad depende de la faccion local, no de
+            // factionIsPlayerSide (que da true para FACTION_PLAYER siempre y
+            // dejaba al cliente PvP sin poder valorar/atacar al host).
+            bool showOdds=isAdjHover&&!armyMoving&&isHostileTo(g_localFaction,p.owner)
                           &&armyCanAct&&explored;
             float twW=uiPx(240.f), twH=lineH1+lineH2*(showOdds?6.f:5.f)+uiPx(8.f);
             float tx=mouse.x+10, ty=mouse.y-twH-8;
@@ -1238,8 +1241,12 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                                 g_campaign.armyMoveT=0.f;
                             }
                         }
-                    } else if(armyCanAct&&!factionIsPlayerSide(p.owner)){
-                        // Fase I: no se puede atacar a un aliado militar
+                    } else if(armyCanAct&&isHostileTo(g_localFaction,p.owner)){
+                        // Fase I: no se puede atacar a un aliado militar.
+                        // NEW-QA2-01: en PvP el cliente (g_localFaction=
+                        // clientFaction) es hostil hacia el host y viceversa;
+                        // en co-op/solo g_localFaction es FACTION_PLAYER y el
+                        // comportamiento es identico al anterior.
                         if(netIsClient()){
                             // H2: el cliente pide el ataque al host
                             NetCmd ac; ac.cmd=NET_CMD_ATTACK;

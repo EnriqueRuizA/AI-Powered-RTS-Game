@@ -57,6 +57,37 @@ Color factionDisplayColor(FactionId f){
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+//  Hostilidad entre facciones (NEW-QA2-01)
+//  `actor` puede atacar a `target` si no son la misma faccion ni estan en el
+//  mismo bando. El bando local es FACTION_PLAYER + aliados militares (Fase I).
+//  Modos:
+//   - single-player / co-op: para actor==FACTION_PLAYER equivale exactamente
+//     a !factionIsPlayerSide(target) (IA y NEUTRAL hostiles; aliados no). En
+//     co-op ambos jugadores son FACTION_PLAYER => actor==target => no hostil.
+//   - PvP BIDIRECCIONAL: clientFaction y FACTION_PLAYER no comparten bando,
+//     asi que el cliente ya puede atacar provincias del host y el host puede
+//     seguir atacando al cliente (antes el gate era unidireccional porque
+//     factionIsPlayerSide(FACTION_PLAYER) devuelve true SIEMPRE). Excepcion:
+//     una alianza militar explicita con la faccion del cliente
+//     (allied[clientFaction]) los pone en el mismo bando y anula la hostilidad.
+//   - El cliente NO hereda las guerras del host: los aliados militares del
+//     host siguen sin ser objetivos del cliente (comportamiento previo).
+// ───────────────────────────────────────────────────────────────────────────
+bool isHostileTo(FactionId actor,FactionId target){
+    if(actor==target) return false;                          // misma faccion (co-op)
+    if((int)actor<0||(int)actor>=FACTION_COUNT) return false;
+    if((int)target<0||(int)target>=FACTION_COUNT) return false;
+    // Mismo bando: el jugador local (PLAYER) y sus aliados militares
+    if(factionIsPlayerSide(actor)&&factionIsPlayerSide(target)) return false;
+    // PvP: el cliente ataca al host (su unico rival), pero no al resto del
+    // bando local del host (aliados): eso ya no era hostil antes del fix.
+    if(g_campaign.pvpMode&&actor==g_campaign.clientFaction&&
+       target!=FACTION_PLAYER&&factionIsPlayerSide(target))
+        return false;
+    return true;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 //  Fase J: ejércitos de campo (múltiples ejércitos estilo Shogun 2)
 // ───────────────────────────────────────────────────────────────────────────
 static bool isHeroType(int ti){
@@ -1642,6 +1673,45 @@ int runBattleResultTest(){
         check("I5 pvp: client army occupies",
               ca<(int)g_campaign.armies.size()&&
               g_campaign.armies[ca].province==0&&g_campaign.armies[ca].moved);
+    }
+
+    // ── J) isHostileTo: hostilidad PvP bidireccional + co-op (NEW-QA2-01)
+    {
+        reset();
+        check("J1 sp: AI faction hostile to the player",
+              isHostileTo(FACTION_PLAYER,FACTION_AGGRESSIVE));
+        check("J2 sp: neutral province hostile",
+              isHostileTo(FACTION_PLAYER,FACTION_NEUTRAL));
+        g_campaign.allied[FACTION_DEFENSIVE]=true;
+        check("J3 sp: military ally not hostile (both ways)",
+              !isHostileTo(FACTION_PLAYER,FACTION_DEFENSIVE)&&
+              !isHostileTo(FACTION_DEFENSIVE,FACTION_PLAYER));
+        check("J4 coop: both sides are FACTION_PLAYER -> not hostile",
+              !isHostileTo(FACTION_PLAYER,FACTION_PLAYER));
+        // PvP: dos reinos separados -> hostilidad en AMBAS direcciones
+        reset();
+        g_campaign.pvpMode=true;
+        g_campaign.clientFaction=FACTION_AGGRESSIVE;
+        check("J5 pvp: client can attack the host",
+              isHostileTo(g_campaign.clientFaction,FACTION_PLAYER));
+        check("J6 pvp: host can attack the client",
+              isHostileTo(FACTION_PLAYER,g_campaign.clientFaction));
+        check("J7 pvp: a faction is never hostile to itself",
+              !isHostileTo(g_campaign.clientFaction,g_campaign.clientFaction));
+        // Alianza militar explicita con la faccion del cliente -> sin hostilidad
+        g_campaign.allied[(int)g_campaign.clientFaction]=true;
+        check("J8 pvp: explicit alliance removes hostility",
+              !isHostileTo(g_campaign.clientFaction,FACTION_PLAYER)&&
+              !isHostileTo(FACTION_PLAYER,g_campaign.clientFaction));
+        // El cliente no hereda las guerras del host: los aliados del host
+        // siguen sin ser objetivos del cliente (comportamiento previo al fix)
+        reset();
+        g_campaign.pvpMode=true;
+        g_campaign.clientFaction=FACTION_AGGRESSIVE;
+        g_campaign.allied[FACTION_DEFENSIVE]=true;
+        check("J9 pvp: client cannot attack the host's ally",
+              !isHostileTo(g_campaign.clientFaction,FACTION_DEFENSIVE)&&
+              isHostileTo(g_campaign.clientFaction,FACTION_COMMERCIAL));
     }
 
     if(fails==0){ printf("BATTERESULT PASS\n"); return 0; }
