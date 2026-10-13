@@ -312,6 +312,203 @@ int loadUnitData(){
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+//  EDIFICIOS DATA-DRIVEN (D1 paso 2) - data/base/buildings/*.bld
+// ───────────────────────────────────────────────────────────────────────────
+namespace {
+
+// Tabla de edificios: archivo -> builtin de referencia. Orden = enum
+// BuildingType (los saves guardan índices; la sustitución es por nombre en el
+// propio slot, nunca reordena).
+struct BldSlot { const char* file; const char* builtin; };
+const BldSlot kBldSlots[] = {
+    {"market.bld",          "Market"},
+    {"farm.bld",            "Farm"},
+    {"sawmill.bld",         "Sawmill"},
+    {"quarry.bld",          "Quarry"},
+    {"smithy.bld",          "Smithy"},
+    {"barracks.bld",        "Barracks"},
+    {"stable.bld",          "Stable"},
+    {"archery_range.bld",   "Archery Range"},
+    {"armoury_workshop.bld","Armoury Workshop"},
+    {"walls_lv1.bld",       "Walls Lv.1"},
+    {"walls_lv2.bld",       "Walls Lv.2"},
+    {"mage_tower.bld",      "Mage Tower"},
+    {"temple.bld",          "Temple"},
+    {"port.bld",            "Port"},
+    {"watchtower.bld",      "Watchtower"},
+};
+const int kBldSlotCount = (int)(sizeof kBldSlots / sizeof kBldSlots[0]);
+
+// Campos soportados de BuildingDef (schema se gestiona inline como en units)
+enum BldFieldId {
+    B_NAME=0, B_COST_GOLD, B_COST_WOOD, B_COST_STONE, B_COST_IRON,
+    B_TURNS, B_PREREQ,
+    B_YIELD_GOLD, B_YIELD_FOOD, B_YIELD_WOOD, B_YIELD_STONE, B_YIELD_IRON,
+    B_FLAGS,
+    B_COUNT
+};
+const char* kBldFieldKeys[B_COUNT] = {
+    "name", "cost.gold", "cost.wood", "cost.stone", "cost.iron",
+    "turns", "prereq",
+    "yield.gold", "yield.food", "yield.wood", "yield.stone", "yield.iron",
+    "flags"
+};
+
+int findBldField(const std::string& key){
+    for(int i=0;i<B_COUNT;i++) if(key==kBldFieldKeys[i]) return i;
+    return -1;
+}
+
+// Aplica un campo de edificio. Devuelve false con `err` relleno si el valor
+// es invalido (en ese caso el edificio entero cae a fallback).
+bool applyBldField(BuildingDef& t,int fi,const std::string& key,
+                   const std::string& val,std::string& err){
+    switch(fi){
+    case B_NAME:
+        if(val.size()>=sizeof t.name){ err="name: too long (max 31 chars)"; return false; }
+        snprintf(t.name,sizeof t.name,"%s",val.c_str());
+        return true;
+    case B_COST_GOLD:  return setInt(key,val,t.goldCost,err);
+    case B_COST_WOOD:  return setInt(key,val,t.woodCost,err);
+    case B_COST_STONE: return setInt(key,val,t.stoneCost,err);
+    case B_COST_IRON:  return setInt(key,val,t.ironCost,err);
+    case B_TURNS:      return setInt(key,val,t.turns,err);
+    case B_YIELD_GOLD: return setFloat(key,val,t.goldYield,err);
+    case B_YIELD_FOOD: return setFloat(key,val,t.foodYield,err);
+    case B_YIELD_WOOD: return setFloat(key,val,t.woodYield,err);
+    case B_YIELD_STONE:return setFloat(key,val,t.stoneYield,err);
+    case B_YIELD_IRON: return setFloat(key,val,t.ironYield,err);
+    case B_PREREQ: {
+        int v=0;
+        if(!parseIntVal(val,v)){ err="prereq: invalid integer '"+val+"'"; return false; }
+        if(v<-1||v>=BLD_COUNT){
+            err="prereq: expected -1 or 0.."+std::to_string(BLD_COUNT-1)+" got '"+val+"'";
+            return false;
+        }
+        t.prereq=v;
+        return true;
+    }
+    case B_FLAGS: {
+        // Lista por comas estilo units: "none" | "coastal" | "none,coastal"
+        t.coastal=false;
+        size_t p=0;
+        while(p<=val.size()){
+            size_t c=val.find(',',p);
+            if(c==std::string::npos) c=val.size();
+            std::string tok=trim(val.substr(p,c-p));
+            p=c+1;
+            if(tok.empty()) continue;
+            if(ieq(tok,"none")) continue;
+            if(ieq(tok,"coastal")){ t.coastal=true; continue; }
+            err="flags: unknown flag '"+tok+"' (expected none|coastal)";
+            return false;
+        }
+        return true;
+    }
+    default:
+        err=key+": internal error";
+        return false;
+    }
+}
+
+} // namespace
+
+int loadBuildingDataFrom(const char* buildingsDir, BuildingDef* target,
+                         std::vector<std::string>* msgs){
+    BuildingDef builtins[BLD_COUNT];
+    for(int i=0;i<BLD_COUNT;i++) builtins[i]=target[i];  // base de fallback
+    int loaded=0;
+
+    for(int s=0;s<kBldSlotCount;s++){
+        const BldSlot& slot=kBldSlots[s];
+        std::string path=std::string(buildingsDir)+"/"+slot.file;
+        FILE* fp=fopen(path.c_str(),"r");
+        if(!fp){
+            addMsg(msgs,path+": file not found - keeping builtin \""+std::string(slot.builtin)+"\"");
+            continue;
+        }
+        int bi=-1;
+        for(int i=0;i<BLD_COUNT;i++)
+            if(strcmp(builtins[i].name,slot.builtin)==0){ bi=i; break; }
+        if(bi<0){
+            fclose(fp);
+            addMsg(msgs,path+": builtin \""+std::string(slot.builtin)+"\" not found - skipped");
+            continue;
+        }
+
+        BuildingDef t=builtins[bi];
+        bool seen[B_COUNT]={false};
+        bool ok=true;
+        std::string err;
+        int  errLine=0, lastLine=0, lineNo=0;
+        char buf[1024];
+
+        while(ok && fgets(buf,(int)sizeof buf,fp)){
+            lineNo++; lastLine=lineNo;
+            std::string line=trim(cropEol(buf));
+            if(line.empty() || line[0]==';' || line[0]=='#') continue;
+            if(line[0]=='[') continue;   // cabecera de seccion INI (.bld planos)
+            std::string key,val;
+            if(!splitKV(line,key,val)){
+                ok=false; errLine=lineNo; err="syntax error, expected 'key = value'";
+                break;
+            }
+            if(key=="schema"){
+                int sv=0;
+                if(!parseIntVal(val,sv)){ ok=false; errLine=lineNo; err="schema: invalid integer '"+val+"'"; break; }
+                if(sv!=1){ ok=false; errLine=lineNo; err="schema: unsupported version '"+val+"' (expected 1)"; }
+                continue;
+            }
+            int fi=findBldField(key);
+            if(fi<0){
+                addMsg(msgs,path+":"+std::to_string(lineNo)+": unknown key '"+key+"' (ignored)");
+                continue;
+            }
+            if(seen[fi]){ ok=false; errLine=lineNo; err="duplicate key '"+key+"'"; break; }
+            if(!applyBldField(t,fi,key,val,err)){ ok=false; errLine=lineNo; break; }
+            seen[fi]=true;
+        }
+        fclose(fp);
+
+        if(ok){
+            for(int i=0;i<B_COUNT;i++){
+                if(!seen[i]){
+                    ok=false;
+                    err="missing key '"+std::string(kBldFieldKeys[i])+"'";
+                    errLine=lastLine>0?lastLine:1;
+                    break;
+                }
+            }
+        }
+        if(!ok){
+            addMsg(msgs,path+":"+std::to_string(errLine)+": "+err+
+                   " - keeping builtin \""+std::string(slot.builtin)+"\"");
+            continue;
+        }
+        target[bi]=t;
+        loaded++;
+    }
+    return loaded;
+}
+
+int loadBuildingData(){
+    BuildingDef defs[BLD_COUNT];
+    defineBuiltinBuildings(defs);   // golden: la unica fuente de verdad
+    std::vector<std::string> msgs;
+    int n=loadBuildingDataFrom(GAMEDATA_BUILDINGS_DIR,defs,&msgs);
+    applyBuildingDefs(defs);        // activa tablas globales (incluso fallback)
+    for(size_t i=0;i<msgs.size();i++){
+        printf("[gamedata] %s\n",msgs[i].c_str());
+        TraceLog(LOG_WARNING,"[gamedata] %s",msgs[i].c_str());
+        battleLogAdd("[Data] "+msgs[i]);
+    }
+    if(!msgs.empty())
+        printf("[gamedata] %d/%d edificios desde %s (%d en fallback)\n",
+               n,kBldSlotCount,GAMEDATA_BUILDINGS_DIR,kBldSlotCount-n);
+    return n;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 //  SELF-TEST HEADLESS (-datatest) -> 0/1
 // ───────────────────────────────────────────────────────────────────────────
 namespace {
@@ -436,5 +633,108 @@ int runUnitDataTest(){
 
     printf("----\n");
     printf("DATATEST %s\n",fails==0?"PASS":"FAIL");
+    return fails==0?0:1;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+//  SELF-TEST HEADLESS DE EDIFICIOS (-datatest seccion buildings) -> 0/1
+// ───────────────────────────────────────────────────────────────────────────
+namespace {
+
+int compareBuildings(const BuildingDef* a,const BuildingDef* b,const char* tag){
+    int diffs=0;
+    for(int i=0;i<BLD_COUNT;i++){
+        auto d=[&](const char* field){
+            printf("%s MISMATCH [%s] %s\n",tag,b[i].name,field);
+            diffs++;
+        };
+        if(strcmp(a[i].name,b[i].name)!=0) d("name");
+        if(a[i].goldCost!=b[i].goldCost)   d("cost.gold");
+        if(a[i].woodCost!=b[i].woodCost)   d("cost.wood");
+        if(a[i].stoneCost!=b[i].stoneCost) d("cost.stone");
+        if(a[i].ironCost!=b[i].ironCost)   d("cost.iron");
+        if(a[i].turns!=b[i].turns)         d("turns");
+        if(a[i].prereq!=b[i].prereq)       d("prereq");
+        if(a[i].goldYield!=b[i].goldYield) d("yield.gold");
+        if(a[i].foodYield!=b[i].foodYield) d("yield.food");
+        if(a[i].woodYield!=b[i].woodYield) d("yield.wood");
+        if(a[i].stoneYield!=b[i].stoneYield) d("yield.stone");
+        if(a[i].ironYield!=b[i].ironYield) d("yield.iron");
+        if(a[i].coastal!=b[i].coastal)     d("flags.coastal");
+    }
+    return diffs;
+}
+
+} // namespace
+
+int runBuildingDataTest(){
+    int fails=0;
+    auto check=[&](const char* name,bool ok){
+        printf("%s %s\n",ok?"PASS":"FAIL",name);
+        if(!ok) fails++;
+    };
+
+    printf("BLDDATATEST: edificios data-driven (%s)\n",GAMEDATA_BUILDINGS_DIR);
+
+    BuildingDef builtins[BLD_COUNT];
+    BuildingDef target[BLD_COUNT];
+    std::vector<std::string> msgs;
+    int n;
+
+    // ── A) data/ presente -> 15/15, golden campo a campo + orden ───────────
+    defineBuiltinBuildings(builtins);
+    for(int i=0;i<BLD_COUNT;i++) target[i]=builtins[i];
+    n=loadBuildingDataFrom(GAMEDATA_BUILDINGS_DIR,target,&msgs);
+    for(size_t i=0;i<msgs.size();i++) printf("  [A] %s\n",msgs[i].c_str());
+    check("A: 15/15 edificios cargados desde data/",n==BLD_COUNT);
+    check("A: sin avisos (archivos y claves completos)",msgs.empty());
+    int diffs=compareBuildings(target,builtins,"A");
+    check("A: valores identicos a los builtins (golden)",diffs==0);
+    check("A: orden de slots preservado (enum BuildingType)",
+          strcmp(target[0].name,"Market")==0 &&
+          strcmp(target[13].name,"Port")==0 &&
+          strcmp(target[14].name,"Watchtower")==0);
+
+    // ── B) data/ ausente -> fallback total, mismos valores ─────────────────
+    for(int i=0;i<BLD_COUNT;i++) target[i]=builtins[i];
+    msgs.clear();
+    n=loadBuildingDataFrom("build/_gamedata_missing",target,&msgs);
+    check("B: 0/15 edificios cargados (directorio inexistente)",n==0);
+    check("B: un aviso por cada archivo que falta",(int)msgs.size()==BLD_COUNT);
+    check("B: avisos con fallback legible",
+          (int)msgs.size()==BLD_COUNT && hasMsg(msgs,"file not found"));
+    diffs=compareBuildings(target,builtins,"B");
+    check("B: valores identicos a builtins (fallback)",diffs==0);
+
+    // ── C) archivo invalido -> error legible + fallback, sin crash ────────
+    _mkdir("build");
+    _mkdir("build/_gamedata_badb");
+    const char* bad1="build/_gamedata_badb/market.bld";
+    const char* bad2="build/_gamedata_badb/farm.bld";
+    writeTextFile(bad1,
+        "schema = 1\n"
+        "name = Market\n"
+        "cost.gold = 200\n"
+        "turns = abc\n");
+    writeTextFile(bad2,
+        "schema = 1\n"
+        "name = Farm\n"
+        "cost.gold = 120\n");
+    for(int i=0;i<BLD_COUNT;i++) target[i]=builtins[i];
+    msgs.clear();
+    n=loadBuildingDataFrom("build/_gamedata_badb",target,&msgs);
+    for(size_t i=0;i<msgs.size();i++) printf("  [C] %s\n",msgs[i].c_str());
+    check("C: 0/15 aplicadas (los archivos validos no alcanzan)",n==0);
+    check("C: valor invalido con archivo:linea",
+          hasMsg(msgs,"market.bld:4:"));
+    check("C: clave ausente con archivo:linea",
+          hasMsg(msgs,"farm.bld:3: missing key 'cost.wood'"));
+    diffs=compareBuildings(target,builtins,"C");
+    check("C: sin cambios parciales (fallback completo)",diffs==0);
+    remove(bad1);
+    remove(bad2);
+
+    printf("----\n");
+    printf("BLDDATATEST %s\n",fails==0?"PASS":"FAIL");
     return fails==0?0:1;
 }

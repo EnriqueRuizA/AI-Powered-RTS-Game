@@ -1,0 +1,21 @@
+; data/base/buildings/farm.bld - Farm
+; Edificio data-driven (D1 paso 2). Valores golden identicos a
+; defineBuiltinBuildings() en src/city.cpp: si falta este archivo o alguna
+; clave, el juego mantiene el builtin y avisa por consola/battleLog con
+; archivo:linea (parser: src/gamedata.cpp).
+; prereq  = -1 o el indice del edificio requerido (orden del enum BuildingType)
+; flags   = none | coastal  (coastal: solo en provincia costera)
+schema  = 1
+name    = Farm
+cost.gold  = 120
+cost.wood  = 0
+cost.stone = 0
+cost.iron  = 0
+turns   = 1
+prereq  = -1
+yield.gold  = 0
+yield.food  = 60
+yield.wood  = 0
+yield.stone = 0
+yield.iron  = 0
+flags   = none

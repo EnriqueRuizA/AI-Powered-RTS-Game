@@ -1903,7 +1903,7 @@ GameState updateDrawCityManagement(Vector2 mouse){
         bool built=city.built[b];
         bool constructing=(city.constructing==b);
         bool prereqOk=bldHasPrereq(b,city); // D6: prerrequisito único (city.cpp)
-        bool terrainOk=(b==BLD_PORT)?(prov.terrain==TERRAIN_COAST):true;
+        bool terrainOk=(!bldCoastal[b]||prov.terrain==TERRAIN_COAST); // D1 paso 2: data-driven
         bool canAfford=(res.gold>=bldGoldCost[b]&&res.wood>=bldWoodCost[b]
                         &&res.stone>=bldStoneCost[b]&&res.iron>=bldIronCost[b]);
 
@@ -3310,6 +3310,11 @@ GameState updateDrawDefeat(Vector2 mouse){
 //  MAIN
 // ═══════════════════════════════════════════════════════════════════════════
 int main(int argc, char** argv){
+    // D1 paso 2: tablas de edificios ANTES del loop de argv — los self-tests
+    // headless (-battletest/-nettest) pueden recorrer processTurn, que lee
+    // bldGoldYield/bldNames. defineBuiltinBuildings -> load -> applyBuildingDefs
+    // (fallback a golden si falta data/base/buildings).
+    loadBuildingData();
     // Fase E/F/G/H: -nettest ejecuta los self-tests de red (headless) y sale
     // con 0/1 (capa cruda + sesión + lobby + sincronización de campaña)
     for(int i=1;i<argc;i++){
@@ -3322,8 +3327,12 @@ int main(int argc, char** argv){
         }
         // Self-test headless de las rutas de fin de batalla (sin ventana)
         if(strcmp(argv[i],"-battletest")==0) return runBattleResultTest();
-        // D1: self-test headless de unidades data-driven (golden/fallback)
-        if(strcmp(argv[i],"-datatest")==0) return runUnitDataTest();
+        // D1: self-test headless de unidades + edificios data-driven (golden/fallback)
+        if(strcmp(argv[i],"-datatest")==0){
+            int rc=runUnitDataTest();
+            int rc2=runBuildingDataTest();
+            return (rc==0&&rc2==0)?0:1;
+        }
     }
     // Load persistent settings before creating the window (so resolution applies on startup)
     loadSettings();                  // 3.1: load persistent settings
