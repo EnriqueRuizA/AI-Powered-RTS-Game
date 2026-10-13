@@ -33,6 +33,120 @@ void battleLogAdd(const std::string& s){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  B1: FORMACIONES REALES CON MULTIPLICADORES (data-driven)
+// ═══════════════════════════════════════════════════════════════════════════
+bool g_formationApplied=false; // initBattle la limpia; applyBattleFormation la marca
+
+namespace {
+
+FormationTactic s_formTactics[FORMATION_COUNT];
+FormationTactic s_formNeutral; // slot neutro (mults 1.0) para idx invalido
+bool s_formInit=false;
+
+void ensureFormInit(){
+    if(s_formInit) return;
+    s_formInit=true;
+    defineBuiltinFormations(s_formTactics); // builtins hasta que data/ cargue
+    s_formNeutral=FormationTactic{};
+    snprintf(s_formNeutral.name,sizeof s_formNeutral.name,"NONE");
+    snprintf(s_formNeutral.desc,sizeof s_formNeutral.desc,"No formation");
+    s_formNeutral.frontMult=1.f;    s_formNeutral.depthMult=1.f;
+    s_formNeutral.spacingMult=1.f;  s_formNeutral.speedMult=1.f;
+    s_formNeutral.flankVuln=1.f;    s_formNeutral.frontTakenMult=1.f;
+    s_formNeutral.projTakenMult=1.f;
+}
+
+} // namespace
+
+void defineBuiltinFormations(FormationTactic out[FORMATION_COUNT]){
+    auto mk=[](const char* n,const char* d,float fr,float dp,float sp,float sd,
+               float fl,float ft,float pt){
+        FormationTactic t{};
+        snprintf(t.name,sizeof t.name,"%s",n);
+        snprintf(t.desc,sizeof t.desc,"%s",d);
+        t.frontMult=fr; t.depthMult=dp; t.spacingMult=sp; t.speedMult=sd;
+        t.flankVuln=fl; t.frontTakenMult=ft; t.projTakenMult=pt;
+        return t;
+    };
+    // Balance inicial (±10-25% salvo flankVuln de COLUMN, que la tabla de
+    // producto define como "flanqueo muy alto"): con settings por defecto
+    // (5/26) la geometria reproduce la rejilla preexistente (8/24, 3/22,
+    // 5/26, 6/34). Documentado en data/battle/formations.txt.
+    out[0]=mk("LINE",  "Wide frontage", 1.60f,1.00f,0.92f,1.00f,1.25f,1.00f,1.00f);
+    out[1]=mk("COLUMN","Deep column",   0.60f,1.20f,0.85f,1.00f,1.50f,1.00f,1.00f);
+    out[2]=mk("SQUARE","Balanced box",  1.00f,1.00f,1.00f,0.85f,1.00f,0.85f,1.00f);
+    out[3]=mk("LOOSE", "Spread out",    1.20f,1.00f,1.30f,1.00f,1.00f,1.00f,0.80f);
+}
+
+FormationTactic& formationTactic(int idx){
+    ensureFormInit();
+    if(idx<0||idx>=FORMATION_COUNT) return s_formNeutral;
+    return s_formTactics[idx];
+}
+
+void setFormationTactics(const FormationTactic in[FORMATION_COUNT]){
+    ensureFormInit();
+    for(int i=0;i<FORMATION_COUNT;i++) s_formTactics[i]=in[i];
+}
+
+void applyBattleFormation(int idx){
+    ensureFormInit();
+    if(idx<0||idx>=FORMATION_COUNT) return;
+    const FormationTactic& t=s_formTactics[idx];
+    // D8 intacto: g_settings SOLO se lee; la batalla actual muta g_form*.
+    int cols=(int)(g_settings.formationPerRow*t.frontMult+0.5f);
+    if(cols<1) cols=1;
+    if(cols>16) cols=16;
+    g_formPerRow=cols;
+    float base=g_settings.formationSpacing;
+    g_formSpacing=base*t.spacingMult;
+    if(g_formSpacing<12.f) g_formSpacing=12.f;
+    if(g_formSpacing>52.f) g_formSpacing=52.f;
+    g_formRowSpacing=g_formSpacing*t.depthMult; // profundidad (filas)
+    if(g_formRowSpacing<12.f) g_formRowSpacing=12.f;
+    if(g_formRowSpacing>72.f) g_formRowSpacing=72.f;
+    g_formationApplied=true;
+}
+
+bool formationActiveFor(const BattleUnit& bu){
+    return bu.isPlayer&&g_formationApplied&&
+           g_battle.prepFormation>=0&&g_battle.prepFormation<FORMATION_COUNT;
+}
+float unitFormationSpeedMult(const BattleUnit& bu){
+    return formationActiveFor(bu)?formationTactic(g_battle.prepFormation).speedMult:1.f;
+}
+float unitFormationFrontTakenMult(const BattleUnit& bu){
+    return formationActiveFor(bu)?formationTactic(g_battle.prepFormation).frontTakenMult:1.f;
+}
+float unitFormationProjTakenMult(const BattleUnit& bu){
+    return formationActiveFor(bu)?formationTactic(g_battle.prepFormation).projTakenMult:1.f;
+}
+
+float flankDmgMult(int formIdx,float defFacingDeg,Vector2 attPos,Vector2 defPos){
+    // Vector de incidencia: del DEFENSOR hacia el ATACANTE (si apunta igual
+    // que el rumbo del defensor, el atacante esta de frente).
+    Vector2 dir=vnorm(v2sub(attPos,defPos));
+    float rad=defFacingDeg*DEG2RAD;
+    Vector2 fwd={cosf(rad),-sinf(rad)};      // rumbo del defensor (dirToAngle)
+    float c=dir.x*fwd.x+dir.y*fwd.y;         // cos del angulo de incidencia
+    if(c>=0.5f) return 1.f;                  // arco frontal (+-60 grados)
+    float vuln=formIdx>=0&&formIdx<FORMATION_COUNT
+                ?formationTactic(formIdx).flankVuln:1.f;
+    if(vuln<1.f) vuln=1.f;
+    float ramp=(0.5f-c)/1.5f;                // cos 0.5 -> 0 ; cos -1 -> 1
+    if(ramp<0.f) ramp=0.f;
+    if(ramp>1.f) ramp=1.f;
+    return 1.f+(vuln-1.f)*ramp;
+}
+
+float unitFlankDmgMult(const BattleUnit& def,float defFacingDeg,
+                       Vector2 attPos,Vector2 defPos){
+    if(!formationActiveFor(def)) return 1.f;
+    return flankDmgMult(g_battle.prepFormation,defFacingDeg,attPos,defPos);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
 //  FASE D: AUTO-RESOLVE CON PREDICCIÓN (estilo RISK)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -165,6 +279,10 @@ void initBattle(const std::vector<std::pair<int,int>>& playerGroups,
     // selector pre-batalla muta solo estas globales (g_settings intacto)
     g_formPerRow=g_settings.formationPerRow;
     g_formSpacing=g_settings.formationSpacing;
+    // B1: sin formación aplicada las filas usan el mismo spacing (actual);
+    // applyBattleFormation() deriva estas globales al elegir en el overlay.
+    g_formRowSpacing=g_settings.formationSpacing;
+    g_formationApplied=false;
 
     // Generate terrain obstacles (extraído a terrain.cpp; v11: incluye ciudad si la hay)
     bool provHasCity=(provinceIdx>=0&&provinceIdx<(int)g_campaign.provinces.size()&&
@@ -598,6 +716,8 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
         BattleUnit& bu=myUnits[ui];
         if(bu.typeIdx>=unitTypeCount()) continue;
         const UnitTypeDef& td=g_unitTypes[bu.typeIdx];
+        // B1: velocidad efectiva segun formacion aplicada (1.0 sin formacion)
+        const float spd=td.speed*unitFormationSpeedMult(bu);
 
         int aliveCnt=0;
         for(auto& sol:bu.soldiers) if(sol.alive) aliveCnt++;
@@ -634,7 +754,7 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
                 if(!sol.alive) continue;
                 sol.state=SS_FLEEING;
                 Vector2 away=vnorm(v2sub(sol.pos,foeCenter));
-                sol.pos=v2add(sol.pos,v2scale(away,td.speed*1.5f*mdt));
+                sol.pos=v2add(sol.pos,v2scale(away,spd*1.5f*mdt));
                 sol.angleTarget=dirToAngle(away);
                 sol.angle=turnAngle(sol.angle,sol.angleTarget,300.f*mdt);
             }
@@ -665,7 +785,7 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
             float distToTarget=vdist(bu.anchorPos,bu.orderTarget);
 
             if(distToTarget>15.f){
-                desiredAnchor=v2add(bu.anchorPos,v2scale(moveDir,td.speed*mdt));
+                desiredAnchor=v2add(bu.anchorPos,v2scale(moveDir,spd*mdt));
                 bu.formationFacing=dirToAngle(moveDir);
             } else {
                 // Arrived at target
@@ -710,7 +830,7 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
                         +soldierMeleeRadius(td)+soldierMeleeRadius(g_unitTypes[foeTi])+6.f;
                     float holdDist=baseGap+(float)td.range*0.85f;
                     if(distToEnemy>holdDist){
-                        desiredAnchor=v2add(bu.anchorPos,v2scale(toEnemy,td.speed*mdt));
+                        desiredAnchor=v2add(bu.anchorPos,v2scale(toEnemy,spd*mdt));
                     } else {
                         anchorHold=true;
                     }
@@ -726,7 +846,7 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
                         (float)(mr-1)*sp+(float)(fr-1)*sp
                         +soldierMeleeRadius(td)+soldierMeleeRadius(g_unitTypes[foeTi])+6.f;
                     if(distToEnemy>engagementDistance){
-                        desiredAnchor=v2add(bu.anchorPos,v2scale(toEnemy,td.speed*mdt));
+                        desiredAnchor=v2add(bu.anchorPos,v2scale(toEnemy,spd*mdt));
                     }
                     bu.formationFacing=dirToAngle(toEnemy);
                 }
@@ -835,10 +955,10 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
 
                 if(slotDist>SLOT_TOLERANCE){
                     Vector2 toSlot=vnorm(v2sub(sol.formationSlot,sol.pos));
-                    toSlot=avoidObstacles(sol.pos,toSlot,td.speed,g_battle.obstacles);
+                    toSlot=avoidObstacles(sol.pos,toSlot,spd,g_battle.obstacles);
                     // v8.2: Fast movement - linear instead of deceleration curve
                     // Soldiers move at FULL speed toward their slot
-                    sol.pos=v2add(sol.pos,v2scale(toSlot,td.speed*mdt));
+                    sol.pos=v2add(sol.pos,v2scale(toSlot,spd*mdt));
                     sol.angleTarget=dirToAngle(toSlot);
                     sol.chargeMoveTime+=dt;
                     if(sol.chargeMoveTime>0.8f) sol.chargeReady=(td.spriteBase==SPR_CAVALRY);
@@ -870,15 +990,20 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
                 // lo seguia -> unidades girando como peonzas en medio del combate.
                 if(dist<meleeD*0.7f){
                     Vector2 back=vnorm(v2sub(sol.pos,tgt.pos));
-                    sol.pos=v2add(sol.pos,v2scale(back,td.speed*0.5f*mdt));
+                    sol.pos=v2add(sol.pos,v2scale(back,spd*0.5f*mdt));
                 }else if(dist>meleeD*0.95f){
-                    sol.pos=v2add(sol.pos,v2scale(dir2,td.speed*0.5f*mdt));
+                    sol.pos=v2add(sol.pos,v2scale(dir2,spd*0.5f*mdt));
                 }
 
                 if(sol.meleeTimer<=0){
                     bool chargeBonus=sol.chargeReady&&td.spriteBase==SPR_CAVALRY;
                     float dmg=calcMeleeDmg(td,fTd,chargeBonus);
                     dmg*=1.f+0.075f*(float)bu.veterancy; // D2: +7.5% daño/nivel (Range+Stable)
+                    // B1: multiplicadores de formacion del DEFENSOR: daño
+                    // frontal recibido (SQUARE -15%) y arco de flanqueo
+                    // (LINE +25%, COLUMN +50% por la espalda).
+                    dmg*=unitFormationFrontTakenMult(foeUnits[targetUnit]);
+                    dmg*=unitFlankDmgMult(foeUnits[targetUnit],tgt.angle,sol.pos,tgt.pos);
                     if(chargeBonus&&dmg>0){
                         sol.chargeReady=false;
                         tgt.pos=v2add(tgt.pos,v2scale(dir2,12.f));
@@ -937,9 +1062,9 @@ void updateBattleUnits(std::vector<BattleUnit>& myUnits,
 
                 if(slotDist>8.f){
                     Vector2 toSlot=vnorm(v2sub(sol.formationSlot,sol.pos));
-                    toSlot=avoidObstacles(sol.pos,toSlot,td.speed,g_battle.obstacles);
+                    toSlot=avoidObstacles(sol.pos,toSlot,spd,g_battle.obstacles);
                     // v8.2: Fast movement - no deceleration curve
-                    sol.pos=v2add(sol.pos,v2scale(toSlot,td.speed*mdt));
+                    sol.pos=v2add(sol.pos,v2scale(toSlot,spd*mdt));
                     sol.angleTarget=dirToAngle(toSlot);
                     sol.chargeMoveTime+=dt;
                     if(sol.chargeMoveTime>0.8f) sol.chargeReady=(td.spriteBase==SPR_CAVALRY);
@@ -1366,40 +1491,36 @@ void drawBattleHUD(Vector2 mouse){
         DrawText(tbuf,(int)(bx+boxW*0.5f-tw*0.5f),(int)(by+70),48,tcol);
         DrawText("seconds remaining",(int)(bx+boxW*0.5f-70),(int)(by+124),11,C_SECONDARY);
 
-        // Selector de formación: 4 botones
-        static const char* formNames[4]={"LINE","COLUMN","SQUARE","LOOSE"};
-        static const char* formDesc[4]={"Wide frontage","Deep column","Balanced box","Spread out"};
+        // Selector de formación: 4 botones (nombres/desc desde la tabla
+        // data-driven; B1: al elegir se aplican multiplicadores de frente/
+        // profundidad/velocidad/daño de ESTA batalla)
         float fbtnW=(boxW-60.f)/4.f, fbtnH=uiPx(54.f);
         float fx0=bx+16.f, fy0=by+156.f;
-        for(int f=0;f<4;f++){
+        for(int f=0;f<FORMATION_COUNT;f++){
+            const FormationTactic& ft=formationTactic(f);
             Rectangle fr={fx0+(float)f*(fbtnW+6.f),fy0,fbtnW,fbtnH};
             bool hovF=ptInRect(mouse,fr);
             bool selF=(g_battle.prepFormation==f);
             Color bg=selF?Color{50,70,30,255}:(hovF?Color{35,40,30,255}:Color{22,20,16,255});
             DrawRectangleRec(fr,bg);
             DrawRectangleLinesEx(fr,selF?2.f:1.f,selF?C_GOLD:Color{70,65,50,255});
-            int nw=MeasureText(formNames[f],13);
-            DrawText(formNames[f],(int)(fr.x+fbtnW*0.5f-nw*0.5f),(int)(fr.y+8),13,
+            int nw=MeasureText(ft.name,13);
+            DrawText(ft.name,(int)(fr.x+fbtnW*0.5f-nw*0.5f),(int)(fr.y+8),13,
                      selF?C_GOLD:C_PARCHMENT);
-            int dw=MeasureText(formDesc[f],9);
-            DrawText(formDesc[f],(int)(fr.x+fbtnW*0.5f-dw*0.5f),(int)(fr.y+30),9,C_SECONDARY);
+            int dw=MeasureText(ft.desc,9);
+            DrawText(ft.desc,(int)(fr.x+fbtnW*0.5f-dw*0.5f),(int)(fr.y+30),9,C_SECONDARY);
             if(hovF&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)){
                 g_battle.prepFormation=f;
-                // Aplicar la formación ajustando parámetros (afecta a calcFormationSlots)
-                switch(f){
-                    case 0: g_formPerRow=8; g_formSpacing=24.f; break;
-                    case 1: g_formPerRow=3; g_formSpacing=22.f; break;
-                    case 2: g_formPerRow=5; g_formSpacing=26.f; break;
-                    case 3: g_formPerRow=6; g_formSpacing=34.f; break;
-                }
-                // Recalcular slots de los soldados desplegados
+                // B1: aplica la formación (deriva g_form* desde settings;
+                // D8: g_settings intacto) y recalcula slots de los desplegados
+                applyBattleFormation(f);
                 for(auto& bu:g_battle.playerUnits){
                     auto slots=calcFormationSlots(bu.anchorPos,(int)bu.soldiers.size(),
                                                   bu.formationFacing);
                     for(int s=0;s<(int)bu.soldiers.size()&&s<(int)slots.size();s++)
                         bu.soldiers[s].formationSlot=slots[s];
                 }
-                battleLogAdd(TextFormat("Formation set: %s",formNames[f]));
+                battleLogAdd(TextFormat("Formation set: %s",ft.name));
             }
         }
         // Botón BEGIN BATTLE

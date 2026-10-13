@@ -509,6 +509,205 @@ int loadBuildingData(){
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+//  FORMACIONES DATA-DRIVEN (B1 paso 1) - data/battle/formations.txt
+// ───────────────────────────────────────────────────────────────────────────
+namespace {
+
+// Claves por seccion: las 7 numericas son OBLIGATORIAS (una sola invalida
+// deja la formacion entera en builtin); "desc" es opcional (cosmetico UI).
+enum FormFieldId {
+    FF_FRONT=0, FF_DEPTH, FF_SPACING, FF_SPEED,
+    FF_FLANK, FF_TAKEN_FRONT, FF_TAKEN_PROJ,
+    FF_DESC, FF_COUNT
+};
+const char* kFormKeys[FF_COUNT] = {
+    "front.mult", "depth.mult", "spacing.mult", "speed.mult",
+    "flank.vuln", "taken.front", "taken.proj",
+    "desc"
+};
+
+int findFormField(const std::string& key){
+    for(int i=0;i<FF_COUNT;i++) if(key==kFormKeys[i]) return i;
+    return -1;
+}
+
+// Rango de validacion de todos los multiplicadores (defensa contra typos
+// tipo "12" o "0.01" que romperian el balance sin ruido).
+bool formValOk(float v){ return v>=0.25f&&v<=3.f; }
+
+bool applyFormField(FormationTactic& t,int fi,const std::string& val,std::string& err){
+    if(fi==FF_DESC){
+        if(val.size()>=sizeof t.desc){ err="desc: too long (max 27 chars)"; return false; }
+        snprintf(t.desc,sizeof t.desc,"%s",val.c_str());
+        return true;
+    }
+    float v=0.f;
+    if(!parseFloatVal(val,v)){
+        err=std::string(kFormKeys[fi])+": invalid number '"+val+"'";
+        return false;
+    }
+    if(!formValOk(v)){
+        err=std::string(kFormKeys[fi])+": value "+val+" out of range [0.25..3.00]";
+        return false;
+    }
+    switch(fi){
+    case FF_FRONT:       t.frontMult=v;      return true;
+    case FF_DEPTH:       t.depthMult=v;      return true;
+    case FF_SPACING:     t.spacingMult=v;    return true;
+    case FF_SPEED:       t.speedMult=v;      return true;
+    case FF_FLANK:       t.flankVuln=v;      return true;
+    case FF_TAKEN_FRONT: t.frontTakenMult=v; return true;
+    case FF_TAKEN_PROJ:  t.projTakenMult=v;  return true;
+    default:
+        err=std::string(kFormKeys[fi])+": internal error";
+        return false;
+    }
+}
+
+} // namespace
+
+int loadFormationDataFrom(const char* filePath, FormationTactic target[FORMATION_COUNT],
+                          std::vector<std::string>* msgs){
+    FormationTactic builtins[FORMATION_COUNT];
+    for(int i=0;i<FORMATION_COUNT;i++) builtins[i]=target[i]; // base de fallback
+
+    FILE* fp=fopen(filePath,"r");
+    if(!fp){
+        addMsg(msgs,std::string(filePath)+": file not found - keeping builtins");
+        return 0;
+    }
+
+    int loaded=0;
+    int committed=0;                      // bitmask de secciones ya aplicadas
+    int curIdx=-1;                        // seccion abierta (-1 = fuera)
+    bool curOk=true;
+    std::string curErr;
+    FormationTactic cur{};
+    bool seen[FF_COUNT]={false};
+    int errLine=0, lastLine=0, lineNo=0;
+    bool fileFatal=false;                 // schema invalido => fallback total
+
+    auto loc=[&](int ln){ return std::string(filePath)+":"+std::to_string(ln); };
+
+    auto finishSection=[&](){
+        if(curIdx<0) return;
+        if(curOk){
+            for(int i=0;i<FF_COUNT;i++){
+                if(i==FF_DESC) continue;  // desc opcional
+                if(!seen[i]){
+                    curOk=false;
+                    errLine=lastLine>0?lastLine:1;
+                    curErr="missing key '"+std::string(kFormKeys[i])+"'";
+                    break;
+                }
+            }
+        }
+        if(curOk){
+            target[curIdx]=cur;
+            loaded++;
+        }else{
+            addMsg(msgs,loc(errLine)+": "+curErr+
+                   " - keeping builtin \""+std::string(builtins[curIdx].name)+"\"");
+        }
+        curIdx=-1;
+    };
+
+    char buf[1024];
+    while(!fileFatal&&fgets(buf,(int)sizeof buf,fp)){
+        lineNo++; lastLine=lineNo;
+        std::string line=trim(cropEol(buf));
+        if(line.empty()||line[0]==';'||line[0]=='#') continue;
+
+        // Cabecera de seccion: [LINE], [COLUMN], [SQUARE], [LOOSE]
+        if(line[0]=='['){
+            finishSection();
+            size_t closePos=line.find(']');
+            std::string nm=trim(line.substr(1,closePos==std::string::npos
+                                     ? std::string::npos : closePos-1));
+            if(nm.empty()){
+                addMsg(msgs,loc(lineNo)+": empty section name - ignored");
+                continue;
+            }
+            int si=-1;
+            for(int i=0;i<FORMATION_COUNT;i++) if(ieq(nm,builtins[i].name)){ si=i; break; }
+            if(si<0){
+                addMsg(msgs,loc(lineNo)+": unknown section '"+nm+"' (ignored)");
+                continue;
+            }
+            if(committed&(1<<si)){
+                addMsg(msgs,loc(lineNo)+": duplicate section '"+nm+"' (ignored)");
+                continue;
+            }
+            committed|=(1<<si);
+            curIdx=si;
+            cur=builtins[si];           // base: claves ausentes conservan builtin
+            curOk=true;
+            curErr.clear();
+            for(int i=0;i<FF_COUNT;i++) seen[i]=false;
+            continue;
+        }
+
+        std::string key,val;
+        if(!splitKV(line,key,val)){
+            if(curIdx>=0){
+                curOk=false; errLine=lineNo;
+                curErr="syntax error, expected 'key = value'";
+                curIdx=-1;
+            }else addMsg(msgs,loc(lineNo)+": syntax error, expected 'key = value'");
+            continue;
+        }
+        if(key=="schema"){
+            if(curIdx>=0){
+                addMsg(msgs,loc(lineNo)+": schema must appear before any section");
+                continue;
+            }
+            int sv=0;
+            if(!parseIntVal(val,sv)||sv!=1){
+                addMsg(msgs,loc(lineNo)+": unsupported schema '"+val+
+                       "' (expected 1) - keeping builtins");
+                fileFatal=true;
+            }
+            continue;
+        }
+        int fi=findFormField(key);
+        if(fi<0){
+            addMsg(msgs,loc(lineNo)+": unknown key '"+key+"' (ignored)");
+            continue;
+        }
+        if(curIdx<0){
+            addMsg(msgs,loc(lineNo)+": key '"+key+"' outside any section (ignored)");
+            continue;
+        }
+        if(seen[fi]){
+            curOk=false; errLine=lineNo; curErr="duplicate key '"+key+"'";
+            curIdx=-1; continue;
+        }
+        if(!applyFormField(cur,fi,val,curErr)){ errLine=lineNo; curIdx=-1; continue; }
+        seen[fi]=true;
+    }
+    finishSection();
+    fclose(fp);
+    return fileFatal?0:loaded;
+}
+
+int loadFormationData(){
+    FormationTactic defs[FORMATION_COUNT];
+    defineBuiltinFormations(defs);   // golden: la unica fuente de verdad
+    std::vector<std::string> msgs;
+    int n=loadFormationDataFrom(GAMEDATA_FORMATIONS_FILE,defs,&msgs);
+    setFormationTactics(defs);       // activa data o fallback (identico a builtins)
+    for(size_t i=0;i<msgs.size();i++){
+        printf("[gamedata] %s\n",msgs[i].c_str());
+        TraceLog(LOG_WARNING,"[gamedata] %s",msgs[i].c_str());
+        battleLogAdd("[Data] "+msgs[i]);
+    }
+    if(!msgs.empty())
+        printf("[gamedata] %d/%d formaciones desde %s (%d en fallback)\n",
+               n,FORMATION_COUNT,GAMEDATA_FORMATIONS_FILE,FORMATION_COUNT-n);
+    return n;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 //  SELF-TEST HEADLESS (-datatest) -> 0/1
 // ───────────────────────────────────────────────────────────────────────────
 namespace {

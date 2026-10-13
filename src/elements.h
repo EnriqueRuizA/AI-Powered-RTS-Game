@@ -132,4 +132,8 @@ void formationDims(int count,int* cols,int* rows);   // columnas/filas segun g_f
 // solo toca estos valores => no se persisten en settings.ini ni contaminan
 // la siguiente batalla.
 extern int   g_formPerRow;   // soldados por fila (3..10)
-extern float g_formSpacing;  // px entre soldados (16..40)
+extern float g_formSpacing;  // px entre soldados, eje lateral (16..40)
+// B1: separacion entre FILAS (profundidad). Sin formacion aplicada igual a
+// g_formSpacing (comportamiento actual); applyBattleFormation() la deriva
+// de spacing x depth.mult de la formacion elegida.
+extern float g_formRowSpacing;

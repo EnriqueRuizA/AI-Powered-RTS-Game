@@ -1,0 +1,66 @@
+; data/battle/formations.txt - Formaciones de batalla (B1 data-driven)
+; Valores golden identicos a defineBuiltinFormations() en src/combat.cpp:
+; si falta este archivo o alguna clave numerica de una seccion, el juego
+; mantiene el builtin de esa formacion y avisa por consola/battleLog con
+; archivo:linea (parser: src/gamedata.cpp, loadFormationDataFrom).
+;
+; Claves por seccion (las 7 numericas son obligatorias; desc es opcional):
+;   front.mult    x columnas de la formacion (frente)  = round(basePerRow * front.mult)
+;   depth.mult    separacion entre filas (profundidad) = colSpacing * depth.mult
+;   spacing.mult  separacion lateral entre soldados    = base * spacing.mult
+;   speed.mult    velocidad de movimiento del bando con la formacion
+;   flank.vuln    danio recibido en flanco/rear (multiplicador; 1.0 = neutro)
+;   taken.front   danio frontal recibido
+;   taken.proj    danio de proyectil recibido
+; Rango permitido de todos los multiplicadores: [0.25 .. 3.00].
+;
+; Balance inicial B1 (documentado; +-10-25% salvo flank.vuln de COLUMN):
+;   LINE   frente ancha (8 cols con base 5), danio frontal normal,
+;          flanqueo ALTO (+25% recibido por la espalda).
+;   COLUMN frente estrecho (3 cols), +20% de profundidad de fila,
+;          flanqueo MUY ALTO (+50% recibido por la espalda).
+;   SQUARE defensiva: -15% danio frontal recibido, -15% velocidad.
+;   LOOSE  dispersa:  -20% danio de proyectil recibido, velocidad normal.
+; Con los settings por defecto (perRow 5 / spacing 26) la geometria
+; reproduce la rejilla previa: 8/24, 3/26.4, 5/26, 6/33.8 px.
+schema = 1
+
+[LINE]
+desc        = Wide frontage
+front.mult  = 1.60
+depth.mult  = 1.00
+spacing.mult = 0.92
+speed.mult  = 1.00
+flank.vuln  = 1.25
+taken.front = 1.00
+taken.proj  = 1.00
+
+[COLUMN]
+desc        = Deep column
+front.mult  = 0.60
+depth.mult  = 1.20
+spacing.mult = 0.85
+speed.mult  = 1.00
+flank.vuln  = 1.50
+taken.front = 1.00
+taken.proj  = 1.00
+
+[SQUARE]
+desc        = Balanced box
+front.mult  = 1.00
+depth.mult  = 1.00
+spacing.mult = 1.00
+speed.mult  = 0.85
+flank.vuln  = 1.00
+taken.front = 0.85
+taken.proj  = 1.00
+
+[LOOSE]
+desc        = Spread out
+front.mult  = 1.20
+depth.mult  = 1.00
+spacing.mult = 1.30
+speed.mult  = 1.00
+flank.vuln  = 1.00
+taken.front = 1.00
+taken.proj  = 0.80

@@ -64,6 +64,52 @@ struct BattleResult {
 extern BattleState  g_battle;      // (:645)
 extern BattleResult g_lastResult;  // (:661)
 
+// ═══ B1: FORMACIONES REALES CON MULTIPLICADORES (data-driven) ═══════════════
+// Cada formacion define multiplicadores de frente/profundidad (aplicados en
+// los slots via g_formPerRow/g_formSpacing/g_formRowSpacing; ver
+// applyBattleFormation) y de combate (velocidad, flanqueo, daño frontal y
+// de proyectil recibido). Tabla en data/battle/formations.txt; si el
+// archivo falta o una clave es invalida se conservan los builtins
+// (defineBuiltinFormations) con aviso archivo:linea (regla gamedata).
+// D8 intacto: la aplicacion por batalla solo muta g_form* (NO g_settings).
+#define FORMATION_COUNT 4
+struct FormationTactic {
+    char  name[10];          // LINE / COLUMN / SQUARE / LOOSE
+    char  desc[28];          // hint corto para el overlay de preparacion
+    float frontMult;         // frente: columnas = round(basePerRow * frontMult)
+    float depthMult;         // profundidad: filas a colSpacing * depthMult
+    float spacingMult;       // densidad lateral: colSpacing = base * spacingMult
+    float speedMult;         // velocidad de movimiento del bando con la formacion
+    float flankVuln;         // daño recibido en flanco/rear (multiplicador)
+    float frontTakenMult;    // daño frontal recibido
+    float projTakenMult;     // daño de proyectil recibido
+};
+// Builtins golden (combat.cpp): LINE +25% flanqueo, COLUMN +50% flanqueo y
+// +20% profundidad, SQUARE -15% daño frontal y -15% velocidad, LOOSE -20%
+// proyectiles. Balance documentado en data/battle/formations.txt.
+void defineBuiltinFormations(FormationTactic out[FORMATION_COUNT]);
+// Tabla activa: builtins al arrancar; loadFormationData() la sustituye por
+// data/battle/formations.txt si el archivo es valido.
+FormationTactic& formationTactic(int idx); // idx invalido -> slot neutro (1.0)
+void setFormationTactics(const FormationTactic in[FORMATION_COUNT]);
+// Aplica la formacion idx a ESTA batalla: deriva g_formPerRow/g_formSpacing/
+// g_formRowSpacing desde g_settings (solo lectura, D8) y marca la formacion
+// como activa para el jugador. Sin aplicar => multiplicadores 1.0 (actual).
+void applyBattleFormation(int idx);
+extern bool g_formationApplied; // true tras applyBattleFormation (initBattle la limpia)
+// Helpers de multiplicadores para un bando: solo el JUGADOR con formacion
+// aplicada recibe modificadores; el enemigo (sin formacion) queda en 1.0.
+bool   formationActiveFor(const BattleUnit& bu);
+float  unitFormationSpeedMult(const BattleUnit& bu);
+float  unitFormationFrontTakenMult(const BattleUnit& bu);
+float  unitFormationProjTakenMult(const BattleUnit& bu);
+// Daño de flanco: 1.0 en el arco frontal (+-60 grados del rumbo del
+// defensor); rampa lineal hasta flankVuln a 180 grados (ataque por la
+// espalda). defFacingDeg en grados (dirToAngle).
+float  flankDmgMult(int formIdx,float defFacingDeg,Vector2 attPos,Vector2 defPos);
+float  unitFlankDmgMult(const BattleUnit& def,float defFacingDeg,
+                        Vector2 attPos,Vector2 defPos);
+
 // (:757-760)
 extern std::deque<std::string> g_battleLog;
 void battleLogAdd(const std::string& s);

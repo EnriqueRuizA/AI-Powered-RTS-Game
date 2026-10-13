@@ -26,6 +26,7 @@ std::vector<Texture2D>   g_enemyTextures;
 // D8: formacion de la batalla actual (copiada de g_settings en initBattle)
 int   g_formPerRow  = 5;
 float g_formSpacing = 26.f;
+float g_formRowSpacing = 26.f; // B1: profundidad (filas); default = lateral
 
 void defineBuiltinTypes(std::vector<UnitTypeDef>& out){
     out.clear();
@@ -138,6 +139,9 @@ std::vector<Vector2> calcFormationSlots(Vector2 anchor,int count,float facing){
     // Spacing por batalla (g_formSpacing); default 26px para que las hojas
     // bakeadas (~24px de ancho) no se fundan en un blob.
     float spacing=g_formSpacing;
+    // B1: las filas usan la separacion de profundidad (igual a spacing si
+    // no hay formacion aplicada; COLUMN la ensancha via depth.mult).
+    float rowSpacing=g_formRowSpacing;
 
     // Facing direction vector (0° = right, 90° = down, 180° = left, 270° = up)
     float rad=facing*DEG2RAD;
@@ -155,7 +159,7 @@ std::vector<Vector2> calcFormationSlots(Vector2 anchor,int count,float facing){
             // - lateral (ox): across the front width
             // - depth (oy): depth into the formation
             float ox=(c-(cols-1)*0.5f)*spacing;  // lateral spacing across front
-            float oy=r*spacing;                   // depth: full spacing (no overlap)
+            float oy=r*rowSpacing;                // depth (B1: separacion por fila)
 
             // Calculate slot position: move from anchor along right and forward axes
             Vector2 slot={

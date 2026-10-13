@@ -555,7 +555,9 @@ GameState updateDrawBattle(Vector2 mouse,float dt){
                 for(auto& sol:bu.soldiers){
                     if(!sol.alive) continue;
                     if(vdist(p.pos,sol.pos)<14.f){
-                        sol.hp-=p.dmg;
+                        // B1: daño de proyectil con la formacion del DEFENSOR
+                        // (LOOSE -20%; 1.0 sin formacion aplicada)
+                        sol.hp-=p.dmg*unitFormationProjTakenMult(bu);
                         p.alive=false;
                         playSfx(SFX_HIT_FLESH,0.7f);
                         fxSpawnBlood(sol.pos,5);
@@ -3324,6 +3326,8 @@ int main(int argc, char** argv){
     // bldGoldYield/bldNames. defineBuiltinBuildings -> load -> applyBuildingDefs
     // (fallback a golden si falta data/base/buildings).
     loadBuildingData();
+    // B1 paso 1: tabla de formaciones data-driven (data/battle/formations.txt)
+    loadFormationData();
     // Fase E/F/G/H: -nettest ejecuta los self-tests de red (headless) y sale
     // con 0/1 (capa cruda + sesión + lobby + sincronización de campaña)
     for(int i=1;i<argc;i++){

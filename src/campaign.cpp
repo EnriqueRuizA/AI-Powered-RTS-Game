@@ -6,6 +6,7 @@
 #include "city.h"
 #include "save.h"
 #include "combat.h"
+#include "gamedata.h"   // B1: loadFormationDataFrom (-battletest seccion K)
 #include <vector>
 #include <string>
 #include <deque>
@@ -1796,6 +1797,115 @@ int runBattleResultTest(){
         check("J9 pvp: client cannot attack the host's ally",
               !isHostileTo(g_campaign.clientFaction,FACTION_DEFENSIVE)&&
               isHostileTo(g_campaign.clientFaction,FACTION_COMMERCIAL));
+    }
+
+    // ── K) B1: formaciones reales con multiplicadores (data-driven) ───────
+    // Misma composicion + formacion distinta -> cambian frente/profundidad
+    // de los slots, velocidad (DPS de contacto), danio recibido frontal y
+    // flanqueo. Sin formacion aplicada -> multiplicadores 1.0 (actual).
+    {
+        int oldPerRow=g_settings.formationPerRow;
+        float oldSp=g_settings.formationSpacing;
+        reset();
+        g_settings.formationPerRow=5; g_settings.formationSpacing=26.f;
+
+        // K1-K4: slots (frente/profundidad/dispersion)
+        applyBattleFormation(0); // LINE
+        int lineCols=g_formPerRow, lineRows=0;
+        float lineSp=g_formSpacing, lineRow=g_formRowSpacing;
+        formationDims(60,&lineCols,&lineRows);
+        applyBattleFormation(1); // COLUMN
+        int colCols=g_formPerRow, colRows=0;
+        float colSp=g_formSpacing, colRow=g_formRowSpacing;
+        formationDims(60,&colCols,&colRows);
+        check("K1 formations: LINE frente mas ancha que COLUMN",
+              lineCols==8&&colCols==3);
+        check("K2 formations: COLUMN mas profunda que LINE (60 soldados)",
+              colRows>lineRows);
+        check("K3 formations: COLUMN depth.mult ensancha las filas",
+              colRow>colSp&&colRow>lineRow);
+        applyBattleFormation(3); // LOOSE
+        check("K4 formations: LOOSE mas dispersa que LINE",
+              g_formSpacing>lineSp);
+
+        // K5: velocidad
+        check("K5 formations: SQUARE -15% velocidad, LOOSE normal",
+              formationTactic(2).speedMult<1.f&&formationTactic(3).speedMult==1.f);
+
+        // K6-K8: flanqueo (defensor mirando a la derecha, 0 grados;
+        // firma: flankDmgMult(form, rumbo, attPos, defPos))
+        Vector2 defPos={100.f,100.f}, frontAtt={180.f,100.f}, rearAtt={20.f,100.f};
+        float flLine=flankDmgMult(0,0.f,rearAtt,defPos);
+        float flCol =flankDmgMult(1,0.f,rearAtt,defPos);
+        float flSq  =flankDmgMult(2,0.f,rearAtt,defPos);
+        check("K6 formations: flanqueo COLUMN > LINE > SQUARE",
+              flCol>flLine&&flLine>flSq&&flSq==1.f);
+        check("K7 formations: COLUMN flanco trasero = 1.50",
+              flCol>=1.499f&&flCol<=1.501f);
+        check("K8 formations: ataque frontal sin bonus (LINE)",
+              flankDmgMult(0,0.f,frontAtt,defPos)==1.f);
+
+        // K9-K10: danio (DPS efectivo) y proyectiles
+        UnitTypeDef attT{}, defT{};
+        snprintf(attT.name,sizeof attT.name,"FmtAtt");
+        attT.meleeBaseDmg=10.f; attT.meleeAPDmg=2.f;
+        snprintf(defT.name,sizeof defT.name,"FmtDef");
+        defT.armor=20;
+        float baseDmg=calcMeleeDmg(attT,defT,false);
+        check("K9 formations: SQUARE -15% danio frontal, LINE normal",
+              baseDmg*formationTactic(2).frontTakenMult<baseDmg&&
+              baseDmg*formationTactic(0).frontTakenMult==baseDmg);
+        check("K10 formations: LOOSE -20% danio de proyectiles",
+              formationTactic(3).projTakenMult<1.f&&
+              formationTactic(0).projTakenMult==1.f);
+
+        // K11-K12: sin formacion aplicada => 1.0 (comportamiento actual)
+        g_formationApplied=false;
+        BattleUnit pBu{}; pBu.isPlayer=true; pBu.typeIdx=0;
+        check("K11 formations: sin formacion aplicada todo vale 1.0",
+              unitFormationSpeedMult(pBu)==1.f&&
+              unitFormationFrontTakenMult(pBu)==1.f&&
+              unitFormationProjTakenMult(pBu)==1.f&&
+              unitFlankDmgMult(pBu,0.f,{0.f,0.f},{10.f,0.f})==1.f);
+        applyBattleFormation(1); // solo el jugador tiene formacion
+        BattleUnit eBu{}; eBu.isPlayer=false; eBu.typeIdx=0;
+        check("K12 formations: el bando sin formacion no recibe modificadores",
+              unitFormationSpeedMult(eBu)==1.f&&
+              unitFormationFrontTakenMult(eBu)==1.f&&
+              unitFlankDmgMult(eBu,0.f,{0.f,0.f},{10.f,0.f})==1.f);
+
+        // K13-K15: data-driven - golden + fallback (regla gamedata)
+        FormationTactic golden[FORMATION_COUNT];
+        defineBuiltinFormations(golden);
+        FormationTactic target[FORMATION_COUNT];
+        defineBuiltinFormations(target);
+        std::vector<std::string> msgs;
+        int nf=loadFormationDataFrom(GAMEDATA_FORMATIONS_FILE,target,&msgs);
+        for(size_t i=0;i<msgs.size();i++) printf("  [K] %s\n",msgs[i].c_str());
+        check("K13 formations: data/battle/formations.txt 4/4 sin avisos",
+              nf==FORMATION_COUNT&&msgs.empty());
+        bool same=true;
+        for(int i=0;i<FORMATION_COUNT&&same;i++)
+            if(target[i].frontMult!=golden[i].frontMult||
+               target[i].depthMult!=golden[i].depthMult||
+               target[i].spacingMult!=golden[i].spacingMult||
+               target[i].speedMult!=golden[i].speedMult||
+               target[i].flankVuln!=golden[i].flankVuln||
+               target[i].frontTakenMult!=golden[i].frontTakenMult||
+               target[i].projTakenMult!=golden[i].projTakenMult) same=false;
+        check("K14 formations: valores identicos a los builtins (golden)",same);
+        defineBuiltinFormations(target); msgs.clear();
+        nf=loadFormationDataFrom("build/_gamedata_missing/formations.txt",target,&msgs);
+        check("K15 formations: archivo ausente -> fallback total, sin cambios",
+              nf==0&&(int)msgs.size()==1&&
+              target[0].flankVuln==golden[0].flankVuln&&
+              target[3].projTakenMult==golden[3].projTakenMult);
+
+        // restaurar defaults por batalla (higiene del proceso)
+        g_settings.formationPerRow=oldPerRow;
+        g_settings.formationSpacing=oldSp;
+        g_formPerRow=oldPerRow; g_formSpacing=oldSp; g_formRowSpacing=oldSp;
+        g_formationApplied=false;
     }
 
     if(fails==0){ printf("BATTERESULT PASS\n"); return 0; }
