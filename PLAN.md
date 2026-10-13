@@ -1508,3 +1508,78 @@ Defectos P2/P3 confirmados por QA sobre `db20de7` (2 commits tematicos):
   PASS (incidencia aislada, ver 12.5).
 - Pendiente (D1 paso 2): edificios `*.bld` y facciones `*.fac` con el mismo
   esquema de parser y fallback.
+
+### 12.8 D1 paso 2 + G1/D3: edificios data-driven y desembarque selectivo (2026-10-13)
+
+**D1 paso 2 - edificios data-driven con fallback (`1d0b9be`)**
+
+- `src/city.h`: nueva `struct BuildingDef` (name[32], costes gold/wood/stone/
+  iron, turns, prereq -1..14, yields gold/food/wood/stone/iron, flag coastal)
+  + `defineBuiltinBuildings()` (golden sin GL) + `applyBuildingDefs()`.
+  Los arrays globales (`bldNames`, `bldGoldCost`… `bldIronYield`) pierden
+  `const` (antes estaticos; ahora se rellenan via `applyBuildingDefs`) y se
+  anade `bldCoastal[BLD_COUNT]` (Port es el unico `true`).
+- `src/city.cpp`: la unica fuente de verdad golden es la tabla estatica
+  `kBuiltin[BLD_COUNT]` (15 filas, orden = enum BuildingType — los saves
+  guardan indices); `g_bldDefs[BLD_COUNT]` da storage estable a
+  `bldNames[]` (mismo patron que las fuentes de unidades).
+- `src/gamedata.{h,cpp}`: `loadBuildingDataFrom()` con el MISMO parser INI
+  que units (schema=1, claves completas o fallback, avisos
+  `archivo:linea`, claves desconocidas ignoradas con aviso). Claves:
+  `name`, `cost.gold|wood|stone|iron`, `turns`, `prereq`, `yield.*`,
+  `flags` (`none|coastal`, lista por comas). `loadBuildingData()` =
+  define -> load -> apply (tablas activas incluso en fallback) + avisos a
+  consola/battleLog.
+- `data/base/buildings/*.bld` (15 archivos): Market…Watchtower con los
+  valores golden exactos; slots por nombre en orden enum (el loader
+  sustituye por nombre, nunca reordena — critico para saves).
+- `src/main.cpp`: `loadBuildingData()` al inicio de `main()` ANTES del loop
+  de argv (los self-tests -battletest/-nettest pueden recorrer
+  `processTurn`, que lee `bldGoldYield`/`bldNames`); `-datatest` ahora
+  ejecuta `runUnitDataTest()` + `runBuildingDataTest()` combinando exit
+  codes; `terrainOk` usa `bldCoastal[b]` en vez del hardcode `b==BLD_PORT`.
+- `runBuildingDataTest()` (seccion BLDDATATEST del -datatest): A) 15/15
+  desde data/ + golden campo a campo + orden de slots; B) fallback total
+  con 15 avisos; C) archivo corrupto con `archivo:linea` + fallback sin
+  cambios parciales.
+- Regresion: build 0/0; `-datatest` PASS (units 11 + buildings 12 checks);
+  `-battletest`, `-nettest` exit 0; `test_city`, `test_faseD`, `test_faseK`,
+  `test_faseJ`, `test_ranged` ALL PASS.
+
+**G1/D3 - desembarque con seleccion de tipos y cantidades (`283e23d`)**
+
+- `src/campaign.{h,cpp}`: nueva `disembarkTake(shipIdx, take)` — la logica
+  del modal extraida a logica de juego testeable headless. Valida barco
+  local, clamp de `take` a lo disponible, crea ejercito terrestre
+  (`moved=true`, veterania heredada), scuttle via `removeArmyAt` si el
+  barco queda vacio, seleccion en el barco (si queda) o en el aterrizado.
+  `netMarkDirty()` queda en el caller (main.cpp).
+- **Fix P3** (deuda observada en 12.7): el antiguo
+  `if(shipEmpty&&landIdx>ai) landIdx--` del modal apuntaba la seleccion al
+  ejercito ANTERIOR al desembarcado tras el scuttle; `land` siempre queda
+  en `size()-1` tras `push_back`. La linea se elimina y la regresion queda
+  cubierta por el check C del self-test (ejercitos [A, ship, B]: tras
+  tomar todo, seleccion == ejercito aterrizado y unidades == take).
+- `src/main.cpp`: modal reescrito con estado `g_disembarkPick`
+  ({tipo, cantidad} por fila): [-]/[+] ajustan la cantidad (clamp 0..cnt),
+  click en la cifra alterna 0/todo, clic en la fila aterriza todo el tipo
+  (comportamiento previo conservado). LAND HALF se sustituye por LAND
+  SELECTED (mismas coordenadas/colores); LAND ALL y CLOSE intactos.
+  Revalidacion por `shipId` tras cada `disembarkTake` (cierra el modal si
+  el barco desaparecio); `netCanEdit()` gate en todas las acciones.
+- `-disembarktest` -> `runDisembarkTest()` headless en campaign.cpp (20
+  checks en 6 secciones): A) subconjunto deja resto en barco + seleccion
+  en el barco; B) tipo completo se borra del barco; C) scuttle +
+  seleccion en aterrizado (regresion P3); D) clamp; E) indices
+  invalidos/take vacio -> -1 sin cambios; F) veterania/provincia/moved
+  heredados del barco.
+- `build/test_disembark.ps1` (local; `build/` es gitignorado, como el
+  resto de scripts de test): invoca `-disembarktest`, parsea PASS/FAIL y
+  exige exit 0 + >=6 PASS.
+- Regresion: build 0/0; `-disembarktest` PASS (20/20); `-battletest`,
+  `-nettest`, `-datatest` exit 0; `test_city`, `test_faseD`, `test_faseK`,
+  `test_ranged` ALL PASS; `test_faseJ` ALL PASS en la 3a ejecucion (las
+  2 primeras dejaron E/F en FAIL: la IA aggressive en Ashford (adyacente
+  a Greenvale) tiro `roll<aggression*0.8` en el turno 1 — flake aleatorio
+  preexistente de `frandMT()` con semilla `std::random_device`, ~4% por
+  partida, sin relacion con estos cambios).

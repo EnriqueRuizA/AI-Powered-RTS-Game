@@ -62,7 +62,7 @@
 |---|---|---|---|
 | D1 | `bool explored[32]` → en Europa (36 prov.) las provincias **32-35 nunca se exploran** | `campaign.h:91`, `campaign.cpp:92,99,113` | ✅ CERRADO: `explored` es `vector<bool>` dinámico |
 | D2 | Bonus de **Barracks** (`-1t recruit`) y **Range/Stable** (`+veterancy`) solo pintados en UI | `main.cpp:1885-1886` | ✅ CERRADO: `recruitTurnsFor`/`cityVeterancy` + `SAVE_VERSION=12` |
-| D3 | Desembarque no admite **combinación arbitraria** de unidades | `main.cpp:1507-1545` | ⚠️ MITIGADO: LAND HALF (mitad por tipo); selector arbitrario → fase G1 |
+| D3 | Desembarque no admite **combinación arbitraria** de unidades | `main.cpp:1507-1545` | ✅ CERRADO: modal con selector [-] n [+] por tipo + LAND SELECTED (`disembarkTake`, commit `283e23d`) |
 | D4 | `build/test_battle.ps1` roto (apunta a `build\rts_game_mod.exe` inexistente) | `build/test_battle.ps1:20` | ✅ CERRADO: apunta a `rts_game.exe` |
 | D5 | Trabajo v11 **sin commitear** y `PLAN.md` sin documentar la fase | `git status` | ✅ CERRADO: commiteado + `PLAN.md` §12.6 + README |
 | D6 | `bldPrereq` duplicado literal en la UI | `city.cpp:30` vs `main.cpp:1828` | ✅ CERRADO: `bldHasPrereq`/`bldReqName` en `city.h/cpp` |
@@ -190,7 +190,8 @@ RAM** (`main.cpp:2527`, "changes persist until restart"), cola `recruitQueue`.
 saltos), embarque 1 oro/unidad.
 
 **Objetivo**:
-1. Cerrar D3 (desembarque por tipo con cantidades seleccionables).
+1. ~~Cerrar D3 (desembarque por tipo con cantidades seleccionables).~~ ✅
+   Hecho: selector [-] n [+] por tipo + LAND SELECTED (`283e23d`).
 2. **Puntos de movimiento (MP)** por ejército en vez de binario `moved`:
    terreno + general + estación consumen MP. Data-driven por terreno.
 3. **Ejércitos combinables en campo** (ya existe el modal de merge) → añadir
@@ -482,7 +483,11 @@ Prioridad: **P0** = bloquea todo lo demás, **P1** = núcleo de jugabilidad,
   propio `src/gamedata.{h,cpp}` y fallback a builtins con aviso
   `archivo:línea` (consola + battleLog). Self-test headless `-datatest`
   (11 checks: golden / fallback / archivo inválido). Commit `476069f`.
-  **Siguiente (D1 paso 2)**: edificios `*.bld` y facciones `*.fac`.
+- [x] **D1 paso 2** — edificios data-driven: `data/base/buildings/*.bld`
+  (15 edificios con los valores golden de `city.cpp`, orden = enum
+  BuildingType), `BuildingDef` + `defineBuiltinBuildings`/`applyBuildingDefs`,
+  `bldCoastal` (Port) y sección BLDDATATEST del `-datatest` (12 checks).
+  Commit `1d0b9be`. **Siguiente**: facciones `*.fac`.
 
 ---
 
@@ -492,7 +497,7 @@ Antes de empezar cualquier fase, cerrar (§1.3):
 
 - [x] **D1** `explored[32]` → `std::vector<bool>` con tamaño real (bug funcional en Europa)
 - [x] **D2** aplicar bonus de Barracks (reclutamiento) y Range/Stable (veteranía)
-- [ ] **D3** desembarque con selección de tipos/cantidades (mitigado: LAND HALF; completo → G1)
+- [x] **D3** desembarque con selección de tipos/cantidades (selector [-] n [+] por tipo + LAND SELECTED; `disembarkTake` headless + fix P3, commit `283e23d`)
 - [x] **D4** reparar/eliminar `build/test_battle.ps1`
 - [x] **D5** commitear v11 + documentar fase en `PLAN.md` y `README.md`
 - [x] **D6** eliminar `bldPrereq` duplicado de la UI
