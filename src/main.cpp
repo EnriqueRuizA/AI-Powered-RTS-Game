@@ -970,6 +970,8 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
     // D3: modal de desembarco (elegir qué tropas bajan del barco)
     static bool g_disembarkOpen=false;
     static int  g_disembarkArmy=-1;
+    // G1: cantidades elegidas por tipo en el modal ({typeIdx, cantidad})
+    static std::vector<std::pair<int,int>> g_disembarkPick;
 
     // v11: Escape deselecciona el ejército activo
     if(IsKeyPressed(KEY_ESCAPE)&&g_campaign.selectedArmy>=0
@@ -1453,6 +1455,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                 // D3: abrir modal para elegir qué tropas desembarcan
                 g_disembarkOpen=true;
                 g_disembarkArmy=ai;
+                g_disembarkPick.clear(); // G1: selección vacía al abrir
             } else {
                 // Embarcar: 1 oro por unidad
                 int cost=armySoldiers(fa.units);
@@ -1608,7 +1611,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
         }
     }
 
-    // ═══ D3: MODAL DE DESEMBARQUE — elegir qué tropas bajan del barco ═══
+    // ═══ D3/G1: MODAL DE DESEMBARQUE — elegir qué tropas bajan del barco ═══
     if(g_disembarkOpen){
         int ai=g_disembarkArmy;
         // Guard: el barco debe seguir válido y ser del jugador
@@ -1616,48 +1619,33 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
            !g_campaign.armies[ai].isShip||
            g_campaign.armies[ai].owner!=g_localFaction){
             g_disembarkOpen=false;
+            g_disembarkPick.clear();
         } else {
             const int shipProv=g_campaign.armies[ai].province;
-            // Desembarcar take (pares tipo->cantidad) y crear ejército en tierra
-            auto landFromShip=[&](std::vector<std::pair<int,int>> take){
-                // Quitar del barco
-                for(auto& t:take)
-                    for(auto& u:g_campaign.armies[ai].units)
-                        if(u.first==t.first){ u.second-=t.second; break; }
-                g_campaign.armies[ai].units.erase(
-                    std::remove_if(g_campaign.armies[ai].units.begin(),
-                                   g_campaign.armies[ai].units.end(),
-                                   [](const std::pair<int,int>&u){ return u.second<=0; }),
-                    g_campaign.armies[ai].units.end());
-                bool shipEmpty=g_campaign.armies[ai].units.empty();
-                int shipVet=g_campaign.armies[ai].veterancy;
-                FieldArmy land;
-                land.id=g_campaign.nextArmyId++;
-                land.owner=g_campaign.armies[ai].owner;
-                land.province=shipProv;
-                land.moved=true;      // ya se usó el barco este turno
-                land.isShip=false;
-                land.veterancy=shipVet; // D2: la veteranía viaja con las tropas
-                land.units=take;
-                // Vaciar el barco ANTES de push_back (evita realocar con ref vivas)
-                // NEW-QA2-02: removeArmyAt en vez de erase crudo (ajusta
-                // armyMoveIdx, selectedArmy y g_preBattle)
-                if(shipEmpty) removeArmyAt(ai);
-                g_campaign.armies.push_back(land);
-                int landIdx=(int)g_campaign.armies.size()-1;
-                if(shipEmpty&&landIdx>ai) landIdx--;
-                battleLogAdd(TextFormat("Landed %d soldiers at %s",
-                    armySoldiers(take),
-                    shipProv>=0?g_campaign.provinces[shipProv].name:"sea"));
+            // G1: desembarcar take y revalidar el barco por id (los índices
+            // se desplazan si el barco quedó vacío y fue eliminado)
+            auto doLand=[&](const std::vector<std::pair<int,int>>& take){
+                int shipId=g_campaign.armies[ai].id;
+                int li=disembarkTake(ai,take);
+                if(li<0) return;
                 netMarkDirty();
-                if(shipEmpty){
-                    g_disembarkOpen=false;
-                    g_disembarkArmy=-1;
-                    selectArmy(landIdx);
-                    battleLogAdd("Ship emptied and scuttled");
-                } else {
-                    selectArmy(ai);
-                }
+                g_disembarkPick.clear();
+                int shipIdx=-1;
+                for(int i=0;i<(int)g_campaign.armies.size();i++)
+                    if(g_campaign.armies[i].id==shipId&&
+                       g_campaign.armies[i].isShip){ shipIdx=i; break; }
+                if(shipIdx>=0) ai=shipIdx;
+                else { g_disembarkOpen=false; g_disembarkArmy=-1; }
+            };
+            auto pickQty=[&](int ti)->int{
+                for(const auto& p:g_disembarkPick)
+                    if(p.first==ti) return p.second;
+                return 0;
+            };
+            auto setPick=[&](int ti,int q){
+                for(auto& p:g_disembarkPick)
+                    if(p.first==ti){ p.second=q; return; }
+                g_disembarkPick.push_back({ti,q});
             };
 
             // Overlay oscuro
@@ -1669,7 +1657,7 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
             DrawText(TextFormat("DISEMBARK — %s",
                      shipProv>=0?g_campaign.provinces[shipProv].name:"sea"),
                      (int)(mX+14),(int)(mY+10),18,C_GOLD);
-            DrawText("Click a unit type to land all of it",
+            DrawText("Row click: land all | -/+ : select amount",
                      (int)(mX+14),(int)(mY+36),11,C_SECONDARY);
 
             // Lista de unidades a bordo
@@ -1687,43 +1675,64 @@ GameState updateDrawCampaignMap(Vector2 mouse,float dt){
                               {(unsigned char)td.r,(unsigned char)td.g,(unsigned char)td.b,255});
                 DrawText(td.name,(int)(rowR.x+30),(int)(rowR.y+8),12,C_PARCHMENT);
                 DrawText(TextFormat("x%d",cnt),
-                         (int)(rowR.x+rowW-70),(int)(rowR.y+8),12,C_GOLD);
-                DrawText("LAND >>",(int)(rowR.x+rowW-46),(int)(rowR.y+8),10,C_SECONDARY);
-                if(hovRow&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)&&netCanEdit()){
-                    landFromShip({{ti,cnt}});
-                    break;
+                         (int)(rowR.x+rowW-210),(int)(rowR.y+8),12,C_GOLD);
+                // G1: selector de cantidad [-] n [+] (click en n alterna 0/todo)
+                int sel=pickQty(ti);
+                Rectangle minusR={rowR.x+rowW-170.f,rowR.y+5.f,20.f,20.f};
+                Rectangle plusR ={rowR.x+rowW-112.f,rowR.y+5.f,20.f,20.f};
+                Rectangle qtyR  ={rowR.x+rowW-145.f,rowR.y+5.f,28.f,20.f};
+                bool hovM=ptInRect(mouse,minusR), hovP=ptInRect(mouse,plusR);
+                bool hovQ=ptInRect(mouse,qtyR);
+                DrawRectangleRec(minusR,hovM?Color{40,55,75,255}:Color{25,32,44,255});
+                DrawRectangleLinesEx(minusR,1,{70,90,120,255});
+                DrawText("-",(int)(minusR.x+7),(int)(minusR.y+3),12,C_PARCHMENT);
+                DrawText(TextFormat("%d",sel),
+                         (int)(qtyR.x+4),(int)(qtyR.y+3),12,
+                         sel>0?C_GOLD:C_SECONDARY);
+                DrawRectangleRec(plusR,hovP?Color{40,55,75,255}:Color{25,32,44,255});
+                DrawRectangleLinesEx(plusR,1,{70,90,120,255});
+                DrawText("+",(int)(plusR.x+6),(int)(plusR.y+3),12,C_PARCHMENT);
+                DrawText("LAND >>",(int)(rowR.x+rowW-50),(int)(rowR.y+8),10,C_SECONDARY);
+                if(IsMouseButtonPressed(MOUSE_LEFT_BUTTON)&&netCanEdit()){
+                    if(hovM){ setPick(ti,std::max(0,sel-1)); break; }
+                    if(hovP){ setPick(ti,std::min(cnt,sel+1)); break; }
+                    if(hovQ){ setPick(ti,sel>0?0:cnt); break; } // alterna 0/todo
+                    if(hovRow){ doLand({{ti,cnt}}); break; }     // clic en fila = todo
                 }
                 iy+=33.f;
             }
-            // Tras landFromShip el barco pudo desaparecer (g_disembarkOpen=false)
+            // Tras doLand el barco pudo desaparecer (g_disembarkOpen=false)
             if(g_disembarkOpen&&g_campaign.armies[ai].units.empty())
                 DrawText("(empty)",(int)(mX+mW/2-24),(int)(mY+mH/2),12,C_SECONDARY);
 
-            // Botones: LAND ALL + LAND HALF + CLOSE
+            // Botones: LAND ALL + LAND SELECTED + CLOSE
             float btnY2=mY+mH-54.f;
             if(g_disembarkOpen&&drawSmBtn({mX+14.f,btnY2,uiPx(130.f),uiPx(36.f)},"LAND ALL",mouse,
                          Color{45,35,15,255},Color{90,70,30,255})){
                 if(netCanEdit()&&g_disembarkOpen)
-                    landFromShip(g_campaign.armies[ai].units);
+                    doLand(g_campaign.armies[ai].units);
             }
-            if(g_disembarkOpen&&drawSmBtn({mX+14.f+uiPx(140.f),btnY2,uiPx(130.f),uiPx(36.f)},"LAND HALF",mouse,
+            if(g_disembarkOpen&&drawSmBtn({mX+14.f+uiPx(140.f),btnY2,uiPx(130.f),uiPx(36.f)},"LAND SELECTED",mouse,
                          Color{20,50,45,255},Color{40,100,85,255})){
                 if(netCanEdit()&&g_disembarkOpen){
-                    std::vector<std::pair<int,int>> half;
-                    for(auto& u:g_campaign.armies[ai].units){
-                        if(u.second<=0) continue;
-                        half.push_back({u.first,(u.second+1)/2}); // mitad, redondeo arriba
-                    }
-                    landFromShip(half);
+                    std::vector<std::pair<int,int>> take;
+                    for(const auto& p:g_disembarkPick)
+                        if(p.second>0) take.push_back(p);
+                    if(!take.empty()) doLand(take);
                 }
             }
             if(drawSmBtn({mX+mW-uiPx(140.f)-14.f,btnY2,uiPx(140.f),uiPx(36.f)},"CLOSE",mouse,
                          {50,25,25,255},{80,40,40,255})){
                 g_disembarkOpen=false;
                 g_disembarkArmy=-1;
+                g_disembarkPick.clear();
             }
             // ESC cierra
-            if(IsKeyPressed(KEY_ESCAPE)){ g_disembarkOpen=false; g_disembarkArmy=-1; }
+            if(IsKeyPressed(KEY_ESCAPE)){
+                g_disembarkOpen=false;
+                g_disembarkArmy=-1;
+                g_disembarkPick.clear();
+            }
             // Consumir el clic para que no atraviese al mapa
             if(g_disembarkOpen&&IsMouseButtonPressed(MOUSE_LEFT_BUTTON)&&
                ptInRect(mouse,{mX,mY,mW,mH})){
@@ -3327,6 +3336,8 @@ int main(int argc, char** argv){
         }
         // Self-test headless de las rutas de fin de batalla (sin ventana)
         if(strcmp(argv[i],"-battletest")==0) return runBattleResultTest();
+        // G1/D3: self-test headless del desembarque selectivo
+        if(strcmp(argv[i],"-disembarktest")==0) return runDisembarkTest();
         // D1: self-test headless de unidades + edificios data-driven (golden/fallback)
         if(strcmp(argv[i],"-datatest")==0){
             int rc=runUnitDataTest();

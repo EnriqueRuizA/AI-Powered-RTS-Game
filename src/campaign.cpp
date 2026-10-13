@@ -347,6 +347,59 @@ void disbandArmy(int idx){
     selectArmy(nxt==0?-1:std::min(idx,nxt-1));
 }
 
+// G1/D3: desembarca `take` del barco `shipIdx` y crea el ejército en tierra.
+// Lógica extraída del modal de main.cpp para poder testearla headless.
+int disembarkTake(int shipIdx, const std::vector<std::pair<int,int>>& take){
+    if(shipIdx<0||shipIdx>=(int)g_campaign.armies.size()) return -1;
+    FieldArmy& ship=g_campaign.armies[shipIdx];
+    if(!ship.isShip||ship.owner!=g_localFaction) return -1;
+    // Clamp: solo baja lo que el barco lleva de cada tipo
+    std::vector<std::pair<int,int>> real;
+    for(const auto& t:take){
+        if(t.second<=0) continue;
+        for(const auto& u:ship.units)
+            if(u.first==t.first){ real.push_back({t.first,std::min(t.second,u.second)}); break; }
+    }
+    if(real.empty()) return -1;
+    int prov=ship.province;
+    int shipVet=ship.veterancy;
+    FactionId owner=ship.owner;
+    // Quitar del barco
+    for(const auto& t:real)
+        for(auto& u:ship.units)
+            if(u.first==t.first){ u.second-=t.second; break; }
+    ship.units.erase(
+        std::remove_if(ship.units.begin(),ship.units.end(),
+                       [](const std::pair<int,int>&u){ return u.second<=0; }),
+        ship.units.end());
+    bool shipEmpty=ship.units.empty();
+    FieldArmy land;
+    land.id=g_campaign.nextArmyId++;
+    land.owner=owner;
+    land.province=prov;
+    land.moved=true;       // ya se usó el barco este turno
+    land.isShip=false;
+    land.veterancy=shipVet; // D2: la veteranía viaja con las tropas
+    land.units=real;
+    // Vaciar el barco ANTES de push_back (evita realocar con ref vivas);
+    // NEW-QA2-02: removeArmyAt ajusta selectedArmy/armyMoveIdx/g_preBattle.
+    if(shipEmpty) removeArmyAt(shipIdx);
+    g_campaign.armies.push_back(land);
+    int landIdx=(int)g_campaign.armies.size()-1;
+    // P3: land SIEMPRE queda en size()-1 tras push_back; el antiguo
+    // `if(shipEmpty&&landIdx>ai) landIdx--` de main.cpp apuntaba al ejército
+    // equivocado (el anterior al aterrizado).
+    battleLogAdd(TextFormat("Landed %d soldiers at %s",
+        armySoldiers(real), prov>=0?g_campaign.provinces[prov].name:"sea"));
+    if(shipEmpty){
+        battleLogAdd("Ship emptied and scuttled");
+        selectArmy(landIdx);
+    } else {
+        selectArmy(shipIdx);
+    }
+    return landIdx;
+}
+
 
 // ───────────────────────────────────────────────────────────────────────────
 //  GARRISON ARMIES PANEL (0.1: extracted from orphan code)
@@ -1916,4 +1969,149 @@ Color diplomacyMapColor(FactionId f){
     if((int)f>=0&&(int)f<FACTION_COUNT&&g_campaign.tradePact[f])
         return DIPLO_TRADE_COL;   // pacto comercial
     return DIPLO_NONE_COL;        // sin relacion diplomatica
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+//  SELF-TEST HEADLESS (-disembarktest): desembarque selectivo -> 0/1
+//  Sin raylib ni ventana: solo estado de campaña (precedente: -battletest).
+// ───────────────────────────────────────────────────────────────────────────
+int runDisembarkTest(){
+    int fails=0;
+    auto check=[&](const char* name,bool ok){
+        printf("%s %s\n",ok?"PASS":"FAIL",name);
+        if(!ok) fails++;
+    };
+    g_unitTypes.clear();
+    for(int i=0;i<3;i++){
+        UnitTypeDef t{};
+        snprintf(t.name,sizeof t.name,"Test Unit %d",i);
+        t.soldierCount=60;
+        g_unitTypes.push_back(t);
+    }
+    auto mkProv=[](const char* name,FactionId owner)->Province{
+        Province p{};
+        snprintf(p.name,sizeof p.name,"%s",name);
+        p.terrain=TERRAIN_COAST; p.owner=owner; p.hasCity=false;
+        p.city.constructing=-1; p.city.constructTurns=0; p.city.constructSlot=-1;
+        for(int i=0;i<16;i++) p.city.grid[i]=-1;
+        return p;
+    };
+    auto reset=[&](){
+        g_campaign=CampaignState{};
+        g_preBattle=PreBattleState{};
+        g_localFaction=FACTION_PLAYER;
+        g_campaign.provinces={mkProv("Coast",FACTION_PLAYER),
+                              mkProv("Inland",FACTION_PLAYER)};
+    };
+    auto addShip=[&](int prov,const std::vector<std::pair<int,int>>& u,
+                     int vet)->int{
+        FieldArmy a; a.id=g_campaign.nextArmyId++;
+        a.owner=FACTION_PLAYER; a.province=prov; a.units=u;
+        a.isShip=true; a.veterancy=vet; a.moved=false;
+        g_campaign.armies.push_back(a);
+        return (int)g_campaign.armies.size()-1;
+    };
+
+    // ── A) Subconjunto: el resto sigue en el barco, selección en el barco ──
+    {
+        reset();
+        int si=addShip(0,{{0,40},{1,30}},2);
+        selectArmy(si);
+        int li=disembarkTake(si,{{0,25}});
+        check("A: landed army created",li>=0&&li<(int)g_campaign.armies.size());
+        check("A: landed units = take",li>=0&&g_campaign.armies[li].units.size()==1&&
+              g_campaign.armies[li].units[0].first==0&&
+              g_campaign.armies[li].units[0].second==25);
+        check("A: ship keeps the rest",
+              g_campaign.armies[si].units.size()==2&&
+              g_campaign.armies[si].units[0].second==15&&
+              g_campaign.armies[si].units[1].second==30);
+        check("A: selection stays on the ship",
+              g_campaign.selectedArmy==si&&
+              g_campaign.readyUnits.size()==2);
+        check("A: landed army is not a ship",!g_campaign.armies[li].isShip);
+    }
+    // ── B) Tipo completo: se borra la entrada del barco ────────────────────
+    {
+        reset();
+        int si=addShip(0,{{0,40},{1,30}},0);
+        int li=disembarkTake(si,{{1,30}});
+        check("B: type removed from ship",
+              g_campaign.armies[si].units.size()==1&&
+              g_campaign.armies[si].units[0].first==0);
+        check("B: landed 30 of type 1",li>=0&&
+              g_campaign.armies[li].units.size()==1&&
+              g_campaign.armies[li].units[0].first==1&&
+              g_campaign.armies[li].units[0].second==30);
+    }
+    // ── C) Scuttle: barco vacío fuera + selección en el aterrizado (P3) ────
+    // Regresión: armies [A, ship, B]; al scuttle, land queda en size()-1 y la
+    // selección DEBE apuntar ahí (el bug P3 la dejaba en el ejército previo).
+    {
+        reset();
+        FieldArmy a; a.id=g_campaign.nextArmyId++;
+        a.owner=FACTION_PLAYER; a.province=0; a.units={{2,10}};
+        g_campaign.armies.push_back(a);                       // [0] ejército A
+        int si=addShip(0,{{0,40}},0);                         // [1] el barco
+        FieldArmy b; b.id=g_campaign.nextArmyId++;
+        b.owner=FACTION_PLAYER; b.province=1; b.units={{2,5}};
+        g_campaign.armies.push_back(b);                       // [2] ejército B
+        selectArmy(si);
+        int li=disembarkTake(si,{{0,40}});
+        check("C: ship scuttled (no isShip left)",
+              (int)g_campaign.armies.size()==3&&
+              !g_campaign.armies[0].isShip&&
+              !g_campaign.armies[1].isShip&&
+              li>=0&&!g_campaign.armies[li].isShip);
+        check("C: landed units = take",li>=0&&
+              g_campaign.armies[li].units.size()==1&&
+              g_campaign.armies[li].units[0].second==40);
+        check("C: selection on landed army (P3 fix)",
+              g_campaign.selectedArmy==li&&
+              g_campaign.readyUnits.size()==1&&
+              g_campaign.readyUnits[0].second==40);
+    }
+    // ── D) Clamp: take mayor que lo disponible ─────────────────────────────
+    {
+        reset();
+        int si=addShip(0,{{0,20}},0);
+        int li=disembarkTake(si,{{0,999}});
+        check("D: clamped to available",li>=0&&
+              g_campaign.armies[li].units.size()==1&&
+              g_campaign.armies[li].units[0].second==20);
+        check("D: ship empty -> scuttled",
+              armyIndexAt(0,FACTION_PLAYER)==li);
+    }
+    // ── E) Inválidos: sin cambios, devuelve -1 ─────────────────────────────
+    {
+        reset();
+        int si=addShip(0,{{0,40}},0);
+        int before=(int)g_campaign.armies.size();
+        check("E: invalid index -> -1",disembarkTake(-1,{{0,10}})==-1);
+        check("E: non-ship army -> -1",disembarkTake(99,{{0,10}})==-1);
+        FieldArmy land; land.id=g_campaign.nextArmyId++;
+        land.owner=FACTION_PLAYER; land.province=0; land.units={{0,10}};
+        g_campaign.armies.push_back(land);
+        check("E: land army -> -1",
+              disembarkTake((int)g_campaign.armies.size()-1,{{0,10}})==-1);
+        check("E: empty take -> -1",disembarkTake(si,{})==-1);
+        check("E: no changes",
+              (int)g_campaign.armies.size()==before+1&&
+              g_campaign.armies[si].units.size()==1&&
+              g_campaign.armies[si].units[0].second==40);
+    }
+    // ── F) Veteranía + provincia heredadas del barco ────────────────────────
+    {
+        reset();
+        int si=addShip(1,{{0,40}},3);
+        int li=disembarkTake(si,{{0,40}});
+        check("F: veterancy inherited",li>=0&&g_campaign.armies[li].veterancy==3);
+        check("F: province inherited",li>=0&&g_campaign.armies[li].province==1);
+        check("F: moved=true (ship turn already used)",
+              li>=0&&g_campaign.armies[li].moved);
+    }
+
+    printf("----\n");
+    printf("DISEMBARKTEST %s\n",fails==0?"PASS":"FAIL");
+    return fails==0?0:1;
 }

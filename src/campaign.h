@@ -200,6 +200,13 @@ void selectArmy(int idx);                             // sincroniza readyUnits +
 bool formArmyAt(int province, int faction=-1);   // consume 1 general de la reserva + tropas no-héroe (-1 = g_localFaction)
 void joinArmyAt(int province, int faction=-1);   // reserva (no-héroes) -> ejército existente (-1 = g_localFaction)
 void disbandArmy(int idx);                            // ejército -> reserva
+// G1/D3: desembarca `take` (pares tipo->cantidad, clamp a lo disponible en el
+// barco) del ejército-barco `shipIdx`. Crea un ejército terrestre en la misma
+// provincia con esas tropas (moved=true, veteranía heredada). Si el barco queda
+// vacío se elimina (regla v11) y la selección cae en el ejército aterrizado;
+// si queda con tropas, la selección sigue en el barco. Devuelve el índice del
+// ejército aterrizado, o -1 si shipIdx no es un barco válido o take está vacío.
+int  disembarkTake(int shipIdx, const std::vector<std::pair<int,int>>& take);
 int  armySoldiers(const std::vector<std::pair<int,int>>& units);
 int  defenseSoldiers(int province);                   // soldados del jugador en la provincia
 bool armyHasKing(const std::vector<std::pair<int,int>>& units);
@@ -236,3 +243,5 @@ bool applyBattleResultCampaign(bool quickBattle);
 void removeArmyAt(int idx);
 // Self-test headless (-battletest): rutas de fin de batalla -> 0/1
 int runBattleResultTest();
+// Self-test headless (-disembarktest): desembarque selectivo (G1/D3) -> 0/1
+int runDisembarkTest();
