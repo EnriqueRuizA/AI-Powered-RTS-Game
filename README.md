@@ -54,11 +54,17 @@ procedurales originales (fallback automático).
 
 ## Estructura
 
-- `src/` — 18 módulos `.cpp` + 17 headers `.h` (reestructuración FASE 1 + fases
+- `src/` — 21 módulos `.cpp` + 19 headers `.h` (reestructuración FASE 1 + fases
   de contenido A–K; red desde la Fase E: `net.h`/`net.cpp`).
 - `assets/sprites/` — hojas de unidades Kenney (CC0) con fallback procedural.
+- `data/base/` — **unidades** (`units/*.unit`) y **edificios** (`buildings/*.bld`)
+  *data-driven*: el juego los carga al arrancar y, si falta un archivo o una
+  clave, conserva los valores *built-in* y avisa por consola/battleLog
+  (parser propio `gamedata.cpp`, sin dependencias externas).
+- `data/battle/formations.txt` — multiplicadores de formación de batalla (B1).
 - `tools/preview_sprites.cpp` — genera `build/sprite_preview.png` para verificar
   la integración de sprites sin arrancar el juego.
+- `ARCHITECTURE.md` — módulos, dependencias y decisiones de diseño.
 - `PLAN.md` — plan de reestructuración, histórico de fases (§12) y estado.
 - `settings.example.ini` — plantilla versionada de la configuración.
 
@@ -113,25 +119,43 @@ procedurales originales (fallback automático).
 
 ## Tests
 
-Los tests viven en `build/` (ignorado en Git; son utilidades locales, ASCII
-puro para PowerShell 5.1). Requieren `uiScale 1.000` en `settings.ini` y
-1600×900. Ejecutar desde la raíz, un test por invocación:
+Hay dos familias: **self-tests headless** (sin ventana, se invocan directamente
+sobre `rts_game.exe` y salen con código 0=PASS / 1=FAIL) y **suites UI** en
+`build/` (ignoradas en Git; utilidades locales en ASCII puro para PowerShell
+5.1, que arrancan el juego y verifican por píxeles). Las suites UI requieren
+`uiScale 1.000` en `settings.ini` y 1600×900. Ejecutar desde la raíz, un test
+por invocación:
+
+```bat
+rem --- Self-tests headless ---
+rts_game.exe -nettest         # red: capa cruda + sesion + lobby + sync campana
+rts_game.exe -battletest      # rutas de fin de batalla + formaciones (B1)
+rts_game.exe -datatest        # unidades y edificios data-driven (golden/fallback)
+rts_game.exe -disembarktest   # desembarque selectivo de tipos y cantidades
+```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build\test_net.ps1     # red (-nettest)
-powershell -ExecutionPolicy Bypass -File build\test_h_sync.ps1  # sync campana (-nettest)
-powershell -ExecutionPolicy Bypass -File build\test_g_lobby.ps1 # lobby multiplayer (UI)
-powershell -ExecutionPolicy Bypass -File build\test_faseK.ps1   # campaña Great Continent
-powershell -ExecutionPolicy Bypass -File build\test_faseI.ps1   # diplomacia
-powershell -ExecutionPolicy Bypass -File build\test_faseJ.ps1   # ejércitos de campo
-powershell -ExecutionPolicy Bypass -File build\test_faseD.ps1   # auto-resolve
-powershell -ExecutionPolicy Bypass -File build\test_ranged.ps1  # unidades con alcance
+powershell -ExecutionPolicy Bypass -File build\test_net.ps1         # red (-nettest)
+powershell -ExecutionPolicy Bypass -File build\test_h_sync.ps1      # sync campana (-nettest)
+powershell -ExecutionPolicy Bypass -File build\test_g_lobby.ps1     # lobby multiplayer (UI)
+powershell -ExecutionPolicy Bypass -File build\test_faseK.ps1       # campana Great Continent
+powershell -ExecutionPolicy Bypass -File build\test_faseI.ps1       # diplomacia
+powershell -ExecutionPolicy Bypass -File build\test_faseJ.ps1       # ejercitos de campo
+powershell -ExecutionPolicy Bypass -File build\test_faseD.ps1       # auto-resolve
+powershell -ExecutionPolicy Bypass -File build\test_ranged.ps1      # unidades con alcance
+powershell -ExecutionPolicy Bypass -File build\test_city.ps1        # matriz de construccion 4x4
+powershell -ExecutionPolicy Bypass -File build\test_battleres.ps1   # fin de batalla (-battletest)
+powershell -ExecutionPolicy Bypass -File build\test_disembark.ps1   # desembarque (-disembarktest)
+powershell -ExecutionPolicy Bypass -File build\test_battle.ps1      # smoke de batalla por UI
+powershell -ExecutionPolicy Bypass -File build\test_map.ps1         # mapa de campana
+powershell -ExecutionPolicy Bypass -File build\test_vfx.ps1         # efectos visuales
 ```
 
 > **Nota**: tras añadir la 5ª campaña (Europa), el botón QUICK BATTLE del
 > menú bajó un paso: los tests de batalla usan las coordenadas actualizadas
 > (`Click 800 572`) y pulsan **BEGIN BATTLE** (`Click 800 568`) para saltar
-> la fase de preparación.
+> la fase de preparación. `test_faseJ` tiene un flake conocido (~4 %) por la
+> IA agresiva en el turno 1: si falla, reintentar una vez.
 
 ## Novedades v11/v12 (campaña y batalla)
 
